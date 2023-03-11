@@ -24,6 +24,8 @@ from ..utils import add_start_docstrings
 from .beam_constraints import Constraint, ConstraintListState
 
 
+from custom_time_profile_gpu import measure_times
+
 PROCESS_INPUTS_DOCSTRING = r"""
     Args:
         input_ids (`torch.LongTensor` of shape `(batch_size * num_beams, sequence_length)`):
@@ -92,6 +94,7 @@ class BeamScorer(ABC):
 
     @abstractmethod
     @add_start_docstrings(PROCESS_INPUTS_DOCSTRING)
+    @measure_times
     def process(
         self,
         input_ids: torch.LongTensor,
@@ -104,6 +107,7 @@ class BeamScorer(ABC):
 
     @abstractmethod
     @add_start_docstrings(FINALIZE_INPUTS_DOCSTRING)
+    @measure_times
     def finalize(
         self,
         input_ids: torch.LongTensor,
@@ -155,6 +159,7 @@ class BeamSearchScorer(BeamScorer):
             The maximum length of the sequence to be generated.
     """
 
+    @measure_times
     def __init__(
         self,
         batch_size: int,
@@ -199,9 +204,11 @@ class BeamSearchScorer(BeamScorer):
             )
 
     @property
+    @measure_times
     def is_done(self) -> bool:
         return self._done.all()
 
+    @measure_times
     def process(
         self,
         input_ids: torch.LongTensor,
@@ -299,6 +306,7 @@ class BeamSearchScorer(BeamScorer):
             }
         )
 
+    @measure_times
     def finalize(
         self,
         input_ids: torch.LongTensor,
@@ -428,6 +436,7 @@ class ConstrainedBeamSearchScorer(BeamScorer):
             The maximum length of the sequence to be generated.
     """
 
+    @measure_times
     def __init__(
         self,
         batch_size: int,
@@ -474,17 +483,21 @@ class ConstrainedBeamSearchScorer(BeamScorer):
             )
 
     @property
+    @measure_times
     def is_done(self) -> bool:
         return self._done.all()
 
+    @measure_times
     def make_constraint_states(self, n):
         return [ConstraintListState([constraint.copy() for constraint in self.constraints]) for _ in range(n)]
 
+    @measure_times
     def check_completes_constraints(self, sequence):
         new_state = self.make_constraint_states(1)[0]
         new_state.reset(sequence)
         return new_state.completed
 
+    @measure_times
     def process(
         self,
         input_ids: torch.LongTensor,
@@ -628,6 +641,7 @@ class ConstrainedBeamSearchScorer(BeamScorer):
             }
         )
 
+    @measure_times
     def step_sentence_constraint(
         self,
         batch_idx: int,
@@ -769,6 +783,7 @@ class ConstrainedBeamSearchScorer(BeamScorer):
 
         return sent_beam_scores, sent_beam_tokens, sent_beam_indices
 
+    @measure_times
     def finalize(
         self,
         input_ids: torch.LongTensor,

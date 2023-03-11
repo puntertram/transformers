@@ -71,6 +71,7 @@ from .stopping_criteria import (
     validate_stopping_criteria,
 )
 
+from custom_time_profile_gpu import measure_times
 
 logger = logging.get_logger(__name__)
 
@@ -486,6 +487,7 @@ class GenerationMixin:
     learn more about decoding strategies refer to the [text generation strategies guide](./generation_strategies).
     """
 
+    @measure_times
     def prepare_inputs_for_generation(self, *args, **kwargs):
         raise NotImplementedError(
             "A model class needs to define a `prepare_inputs_for_generation` method in order to use `generate`."
@@ -558,6 +560,7 @@ class GenerationMixin:
         """
         return logits
 
+    @measure_times
     def _prepare_input_ids_for_generation(
         self, bos_token_id: Optional[int], encoder_outputs: Optional[ModelOutput]
     ) -> torch.LongTensor:
@@ -570,6 +573,7 @@ class GenerationMixin:
             raise ValueError("`bos_token_id` has to be defined when no `input_ids` are provided.")
         return torch.ones((1, 1), dtype=torch.long, device=self.device) * bos_token_id
 
+    @measure_times
     def _prepare_attention_mask_for_generation(
         self,
         inputs: torch.Tensor,
@@ -588,6 +592,7 @@ class GenerationMixin:
         else:
             return torch.ones(inputs.shape[:2], dtype=torch.long, device=inputs.device)
 
+    @measure_times
     def _prepare_encoder_decoder_kwargs_for_generation(
         self, inputs_tensor: torch.Tensor, model_kwargs, model_input_name: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -643,6 +648,7 @@ class GenerationMixin:
         )
 
     @staticmethod
+    @measure_times
     def _expand_inputs_for_generation(
         expand_size: int = 1,
         is_encoder_decoder: bool = False,
@@ -688,6 +694,7 @@ class GenerationMixin:
             past_key_values = self._convert_to_standard_cache(past_key_values, batch_size=batch_size)
         return past_key_values
 
+    @measure_times
     def _update_model_kwargs_for_generation(
         self,
         outputs: ModelOutput,
@@ -723,12 +730,14 @@ class GenerationMixin:
 
         return model_kwargs
 
+    @measure_times
     def _reorder_cache(self, past_key_values, beam_idx):
         raise NotImplementedError(
             f"Make sure that a `_reorder_cache` function is correctly implemented in {self.__class__.__module__} to"
             f" enable beam search for {self.__class__}"
         )
 
+    @measure_times
     def _get_logits_warper(
         self,
         generation_config: GenerationConfig,
@@ -767,6 +776,7 @@ class GenerationMixin:
             warpers.append(LogitNormalization())
         return warpers
 
+    @measure_times
     def _get_logits_processor(
         self,
         generation_config: GenerationConfig,
@@ -895,6 +905,7 @@ class GenerationMixin:
         criteria = self._merge_criteria_processor_list(criteria, stopping_criteria)
         return criteria
 
+    @measure_times
     def _merge_criteria_processor_list(
         self,
         default_list: Union[LogitsProcessorList, StoppingCriteriaList],
@@ -916,6 +927,7 @@ class GenerationMixin:
         default_list.extend(custom_list)
         return default_list
 
+    @measure_times
     def compute_transition_scores(
         self,
         sequences: torch.Tensor,
@@ -1063,6 +1075,7 @@ class GenerationMixin:
                 exception_message += f" Please use one of the following classes instead: {generate_compatible_classes}"
             raise TypeError(exception_message)
 
+    @measure_times
     def _validate_model_kwargs(self, model_kwargs: Dict[str, Any]):
         """Validates model kwargs for generation. Generate argument typos will also be caught here."""
         # Excludes arguments that are handled before calling any model function
@@ -1087,6 +1100,7 @@ class GenerationMixin:
             )
 
     @torch.no_grad()
+    @measure_times
     def generate(
         self,
         inputs: Optional[torch.Tensor] = None,
@@ -1587,6 +1601,7 @@ class GenerationMixin:
 
             if generation_config.force_words_ids is not None:
 
+                @measure_times
                 def typeerror():
                     raise ValueError(
                         "`force_words_ids` has to either be a `List[List[List[int]]]` or `List[List[int]]`"
@@ -1654,6 +1669,7 @@ class GenerationMixin:
             )
 
     @torch.no_grad()
+    @measure_times
     def contrastive_search(
         self,
         input_ids: torch.LongTensor,
@@ -2014,6 +2030,7 @@ class GenerationMixin:
         else:
             return input_ids
 
+    @measure_times
     def greedy_search(
         self,
         input_ids: torch.LongTensor,
@@ -2260,6 +2277,7 @@ class GenerationMixin:
         else:
             return input_ids
 
+    @measure_times
     def sample(
         self,
         input_ids: torch.LongTensor,
@@ -2529,6 +2547,7 @@ class GenerationMixin:
         else:
             return input_ids
 
+    @measure_times
     def beam_search(
         self,
         input_ids: torch.LongTensor,
@@ -2852,6 +2871,7 @@ class GenerationMixin:
         else:
             return sequence_outputs["sequences"]
 
+    @measure_times
     def beam_sample(
         self,
         input_ids: torch.LongTensor,
@@ -3185,6 +3205,7 @@ class GenerationMixin:
         else:
             return sequence_outputs["sequences"]
 
+    @measure_times
     def group_beam_search(
         self,
         input_ids: torch.LongTensor,
@@ -3563,6 +3584,7 @@ class GenerationMixin:
         else:
             return sequence_outputs["sequences"]
 
+    @measure_times
     def constrained_beam_search(
         self,
         input_ids: torch.LongTensor,
@@ -3889,6 +3911,7 @@ class GenerationMixin:
             return sequence_outputs["sequences"]
 
 
+@measure_times
 def top_k_top_p_filtering(
     logits: torch.FloatTensor,
     top_k: int = 0,
@@ -3924,6 +3947,7 @@ def top_k_top_p_filtering(
     return logits
 
 
+@measure_times
 def _ranking_fast(
     context_hidden: torch.FloatTensor,
     next_hidden: torch.FloatTensor,

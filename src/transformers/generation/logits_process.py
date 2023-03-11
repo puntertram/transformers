@@ -23,6 +23,7 @@ import torch
 from ..utils import add_start_docstrings
 from ..utils.logging import get_logger
 
+from custom_time_profile_gpu import measure_times
 
 logger = get_logger(__name__)
 
@@ -52,6 +53,7 @@ class LogitsProcessor:
     """Abstract base class for all logit processors that can be applied during generation."""
 
     @add_start_docstrings(LOGITS_PROCESSOR_INPUTS_DOCSTRING)
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         """Torch method for processing logits."""
         raise NotImplementedError(
@@ -63,6 +65,7 @@ class LogitsWarper:
     """Abstract base class for all logit warpers that can be applied during generation with multinomial sampling."""
 
     @add_start_docstrings(LOGITS_PROCESSOR_INPUTS_DOCSTRING)
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         """Torch method for warping logits."""
         raise NotImplementedError(
@@ -78,6 +81,7 @@ class LogitsProcessorList(list):
     """
 
     @add_start_docstrings(LOGITS_PROCESSOR_INPUTS_DOCSTRING)
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> torch.FloatTensor:
         for processor in self:
             function_args = inspect.signature(processor.__call__).parameters
@@ -104,6 +108,7 @@ class MinLengthLogitsProcessor(LogitsProcessor):
             The id of the *end-of-sequence* token. Optionally, use a list to set multiple *end-of-sequence* tokens.
     """
 
+    @measure_times
     def __init__(self, min_length: int, eos_token_id: Union[int, List[int]]):
         if not isinstance(min_length, int) or min_length < 0:
             raise ValueError(f"`min_length` has to be a positive integer, but is {min_length}")
@@ -116,6 +121,7 @@ class MinLengthLogitsProcessor(LogitsProcessor):
         self.min_length = min_length
         self.eos_token_id = eos_token_id
 
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         cur_len = input_ids.shape[-1]
         if cur_len < self.min_length:
@@ -137,6 +143,7 @@ class MinNewTokensLengthLogitsProcessor(LogitsProcessor):
             The id of the *end-of-sequence* token.
     """
 
+    @measure_times
     def __init__(self, prompt_length_to_skip: int, min_new_tokens: int, eos_token_id: int):
         for arg_name, arg_value in [
             ("prompt_length_to_skip", prompt_length_to_skip),
@@ -150,6 +157,7 @@ class MinNewTokensLengthLogitsProcessor(LogitsProcessor):
         self.min_new_tokens = min_new_tokens
         self.eos_token_id = eos_token_id
 
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         new_tokens_length = input_ids.shape[-1] - self.prompt_length_to_skip
         if new_tokens_length < self.min_new_tokens:
@@ -167,12 +175,14 @@ class TemperatureLogitsWarper(LogitsWarper):
             The value used to module the logits distribution.
     """
 
+    @measure_times
     def __init__(self, temperature: float):
         if not isinstance(temperature, float) or not (temperature > 0):
             raise ValueError(f"`temperature` has to be a strictly positive float, but is {temperature}")
 
         self.temperature = temperature
 
+    @measure_times
     def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.FloatTensor:
         scores = scores / self.temperature
         return scores
@@ -188,12 +198,14 @@ class RepetitionPenaltyLogitsProcessor(LogitsProcessor):
             paper](https://arxiv.org/pdf/1909.05858.pdf) for more details.
     """
 
+    @measure_times
     def __init__(self, penalty: float):
         if not isinstance(penalty, float) or not (penalty > 0):
             raise ValueError(f"`penalty` has to be a strictly positive float, but is {penalty}")
 
         self.penalty = penalty
 
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         score = torch.gather(scores, 1, input_ids)
 
@@ -215,6 +227,7 @@ class EncoderRepetitionPenaltyLogitsProcessor(LogitsProcessor):
             The encoder_input_ids that should not be repeated within the decoder ids.
     """
 
+    @measure_times
     def __init__(self, penalty: float, encoder_input_ids: torch.LongTensor):
         if not isinstance(penalty, float) or not (penalty > 0):
             raise ValueError(f"`penalty` has to be a strictly positive float, but is {penalty}")
@@ -222,6 +235,7 @@ class EncoderRepetitionPenaltyLogitsProcessor(LogitsProcessor):
         self.penalty = 1 / penalty
         self.encoder_input_ids = encoder_input_ids
 
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         score = torch.gather(scores, 1, self.encoder_input_ids)
 
@@ -246,6 +260,7 @@ class TopPLogitsWarper(LogitsWarper):
             Minimum number of tokens that cannot be filtered.
     """
 
+    @measure_times
     def __init__(self, top_p: float, filter_value: float = -float("Inf"), min_tokens_to_keep: int = 1):
         top_p = float(top_p)
         if top_p < 0 or top_p > 1.0:
@@ -255,6 +270,7 @@ class TopPLogitsWarper(LogitsWarper):
         self.filter_value = filter_value
         self.min_tokens_to_keep = min_tokens_to_keep
 
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         sorted_logits, sorted_indices = torch.sort(scores, descending=False)
         cumulative_probs = sorted_logits.softmax(dim=-1).cumsum(dim=-1)
@@ -284,6 +300,7 @@ class TopKLogitsWarper(LogitsWarper):
             Minimum number of tokens that cannot be filtered.
     """
 
+    @measure_times
     def __init__(self, top_k: int, filter_value: float = -float("Inf"), min_tokens_to_keep: int = 1):
         if not isinstance(top_k, int) or top_k <= 0:
             raise ValueError(f"`top_k` has to be a strictly positive integer, but is {top_k}")
@@ -291,6 +308,7 @@ class TopKLogitsWarper(LogitsWarper):
         self.top_k = max(top_k, min_tokens_to_keep)
         self.filter_value = filter_value
 
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         top_k = min(self.top_k, scores.size(-1))  # Safety check
         # Remove all tokens with a probability less than the last token of the top-k
@@ -313,6 +331,7 @@ class TypicalLogitsWarper(LogitsWarper):
             Minimum number of tokens that cannot be filtered.
     """
 
+    @measure_times
     def __init__(self, mass: float = 0.9, filter_value: float = -float("Inf"), min_tokens_to_keep: int = 1):
         mass = float(mass)
         if not (mass > 0 and mass < 1):
@@ -322,6 +341,7 @@ class TypicalLogitsWarper(LogitsWarper):
         self.mass = mass
         self.min_tokens_to_keep = min_tokens_to_keep
 
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         # calculate entropy
         normalized = torch.nn.functional.log_softmax(scores, dim=-1)
@@ -362,6 +382,7 @@ class EpsilonLogitsWarper(LogitsWarper):
             Minimum number of tokens that cannot be filtered.
     """
 
+    @measure_times
     def __init__(self, epsilon: float, filter_value: float = -float("Inf"), min_tokens_to_keep: int = 1):
         epsilon = float(epsilon)
         if epsilon <= 0 or epsilon >= 1:
@@ -377,6 +398,7 @@ class EpsilonLogitsWarper(LogitsWarper):
         self.filter_value = filter_value
         self.min_tokens_to_keep = min_tokens_to_keep
 
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         # Determine which indices to remove
         probabilities = scores.softmax(dim=-1)
@@ -401,6 +423,7 @@ class EtaLogitsWarper(LogitsWarper):
         min_tokens_to_keep (`int`, *optional*, defaults to 1):
             Minimum number of tokens that cannot be filtered."""
 
+    @measure_times
     def __init__(self, epsilon: float, filter_value: float = -float("Inf"), min_tokens_to_keep: int = 1):
         epsilon = float(epsilon)
         if epsilon <= 0 or epsilon >= 1:
@@ -416,6 +439,7 @@ class EtaLogitsWarper(LogitsWarper):
         self.filter_value = filter_value
         self.min_tokens_to_keep = min_tokens_to_keep
 
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         # Calculate the adaptive cutoff
         probabilities = scores.softmax(dim=-1)
@@ -431,6 +455,7 @@ class EtaLogitsWarper(LogitsWarper):
         return scores
 
 
+@measure_times
 def _get_ngrams(ngram_size: int, prev_input_ids: torch.Tensor, num_hypos: int):
     generated_ngrams = [{} for _ in range(num_hypos)]
     for idx in range(num_hypos):
@@ -481,6 +506,7 @@ class NoRepeatNGramLogitsProcessor(LogitsProcessor):
             raise ValueError(f"`ngram_size` has to be a strictly positive integer, but is {ngram_size}")
         self.ngram_size = ngram_size
 
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         num_batch_hypotheses = scores.shape[0]
         cur_len = input_ids.shape[-1]
@@ -504,6 +530,7 @@ class EncoderNoRepeatNGramLogitsProcessor(LogitsProcessor):
             The encoder_input_ids that should not be repeated within the decoder ids.
     """
 
+    @measure_times
     def __init__(self, encoder_ngram_size: int, encoder_input_ids: torch.LongTensor):
         if not isinstance(encoder_ngram_size, int) or encoder_ngram_size <= 0:
             raise ValueError(
@@ -515,6 +542,7 @@ class EncoderNoRepeatNGramLogitsProcessor(LogitsProcessor):
         self.batch_size = encoder_input_ids.shape[0]
         self.generated_ngrams = _get_ngrams(encoder_ngram_size, encoder_input_ids, self.batch_size)
 
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         # B x num_beams
         num_hypos = scores.shape[0]
@@ -546,6 +574,7 @@ class NoBadWordsLogitsProcessor(LogitsProcessor):
             The id of the *end-of-sequence* token. Optionally, use a list to set multiple *end-of-sequence* tokens.
     """
 
+    @measure_times
     def __init__(self, bad_words_ids: List[List[int]], eos_token_id: Union[int, List[int]]):
         if not isinstance(bad_words_ids, List) or len(bad_words_ids) == 0:
             raise ValueError(f"`bad_words_ids` has to be a non-empty list, but is {bad_words_ids}.")
@@ -581,6 +610,7 @@ class NoBadWordsLogitsProcessor(LogitsProcessor):
             if len(banned_token_seq) == 0:
                 raise ValueError(f"Banned words token sequences {bad_words_ids} cannot have an empty list")
 
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         if self.static_bad_words_mask is None and len(self.bad_words_id_length_1) > 0:
             self.static_bad_words_mask = self._calc_static_bad_word_mask(scores)
@@ -590,11 +620,13 @@ class NoBadWordsLogitsProcessor(LogitsProcessor):
 
         return scores
 
+    @measure_times
     def _calc_static_bad_word_mask(self, scores: torch.FloatTensor) -> torch.BoolTensor:
         static_bad_words_mask = torch.zeros(scores.shape[1])
         static_bad_words_mask[self.bad_words_id_length_1] = 1
         return static_bad_words_mask.unsqueeze(0).to(scores.device).bool()
 
+    @measure_times
     def _tokens_match(self, prev_tokens: List[int], tokens: List[int]) -> bool:
         if len(tokens) == 0:
             # if bad word tokens is just one token always ban it
@@ -605,6 +637,7 @@ class NoBadWordsLogitsProcessor(LogitsProcessor):
         else:
             return prev_tokens[-len(tokens) :] == tokens
 
+    @measure_times
     def _calc_banned_bad_words_ids(self, prev_input_ids: List[List[int]]) -> Iterable[int]:
         banned_tokens = []
         for prev_input_ids_slice in prev_input_ids:
@@ -617,6 +650,7 @@ class NoBadWordsLogitsProcessor(LogitsProcessor):
 
         return banned_tokens
 
+    @measure_times
     def _set_scores_to_inf_for_banned_tokens(
         self, scores: torch.Tensor, banned_tokens: List[List[int]]
     ) -> torch.Tensor:
@@ -680,10 +714,12 @@ class PrefixConstrainedLogitsProcessor(LogitsProcessor):
             `batch_id`.
     """
 
+    @measure_times
     def __init__(self, prefix_allowed_tokens_fn: Callable[[int, torch.Tensor], List[int]], num_beams: int):
         self._prefix_allowed_tokens_fn = prefix_allowed_tokens_fn
         self._num_beams = num_beams
 
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         mask = torch.full_like(scores, -math.inf)
         for batch_id, beam_sent in enumerate(input_ids.view(-1, self._num_beams, input_ids.shape[-1])):
@@ -711,6 +747,7 @@ class HammingDiversityLogitsProcessor(LogitsProcessor):
             See [this paper](https://arxiv.org/pdf/1610.02424.pdf) for more details.
     """
 
+    @measure_times
     def __init__(self, diversity_penalty: float, num_beams: int, num_beam_groups: int):
         if not isinstance(diversity_penalty, float) or (not diversity_penalty > 0.0):
             raise ValueError("`diversity_penalty` should be a float strictly larger than 0.")
@@ -724,6 +761,7 @@ class HammingDiversityLogitsProcessor(LogitsProcessor):
             raise ValueError("`beam_groups` has to be smaller or equal to `num_beams`.")
         self._num_sub_beams = num_beams // num_beam_groups
 
+    @measure_times
     def __call__(
         self,
         input_ids: torch.LongTensor,
@@ -762,9 +800,11 @@ class ForcedBOSTokenLogitsProcessor(LogitsProcessor):
             The id of the token to force as the first generated token.
     """
 
+    @measure_times
     def __init__(self, bos_token_id: int):
         self.bos_token_id = bos_token_id
 
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         cur_len = input_ids.shape[-1]
         if cur_len == 1:
@@ -792,6 +832,7 @@ class ForcedEOSTokenLogitsProcessor(LogitsProcessor):
             eos_token_id = [eos_token_id]
         self.eos_token_id = eos_token_id
 
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         cur_len = input_ids.shape[-1]
         if cur_len == self.max_length - 1:
@@ -809,6 +850,7 @@ class InfNanRemoveLogitsProcessor(LogitsProcessor):
     reached.
     """
 
+    @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         # set all nan values to 0.0
         scores[scores != scores] = 0.0
@@ -834,6 +876,7 @@ class ExponentialDecayLengthPenalty(LogitsProcessor):
             The length of the input sequence.
     """
 
+    @measure_times
     def __init__(
         self,
         exponential_decay_length_penalty: Tuple[int, float],
@@ -846,6 +889,7 @@ class ExponentialDecayLengthPenalty(LogitsProcessor):
             eos_token_id = [eos_token_id]
         self.eos_token_id = eos_token_id
 
+    @measure_times
     def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.FloatTensor:
         cur_len = input_ids.shape[-1]
         if cur_len > self.regulation_start:
@@ -862,6 +906,7 @@ class LogitNormalization(LogitsProcessor, LogitsWarper):
     the scores are normalized when comparing the hypotheses.
     """
 
+    @measure_times
     def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
         scores = scores.log_softmax(dim=-1)
         return scores
@@ -874,10 +919,12 @@ class SuppressTokensAtBeginLogitsProcessor(LogitsProcessor):
     sampled at the begining of the generation.
     """
 
+    @measure_times
     def __init__(self, begin_suppress_tokens, begin_index):
         self.begin_suppress_tokens = list(begin_suppress_tokens)
         self.begin_index = begin_index
 
+    @measure_times
     def __call__(self, input_ids, scores):
         if input_ids.shape[1] == self.begin_index:
             scores[:, self.begin_suppress_tokens] = -float("inf")
@@ -889,9 +936,11 @@ class SuppressTokensLogitsProcessor(LogitsProcessor):
     r"""This processor can be used to suppress a list of tokens. The processor will set their log probs to `-inf` so that they
     are not sampled."""
 
+    @measure_times
     def __init__(self, suppress_tokens):
         self.suppress_tokens = list(suppress_tokens)
 
+    @measure_times
     def __call__(self, input_ids, scores):
         scores[:, self.suppress_tokens] = -float("inf")
         return scores
@@ -902,9 +951,11 @@ class ForceTokensLogitsProcessor(LogitsProcessor):
     indices that will be forced before sampling. The processor will set their log probs to `inf` so that they are
     sampled at their corresponding index."""
 
+    @measure_times
     def __init__(self, force_token_map: List[List[int]]):
         self.force_token_map = dict(force_token_map)
 
+    @measure_times
     def __call__(self, input_ids, scores):
         generation_idx = input_ids.shape[-1]
         current_token = self.force_token_map.get(generation_idx, None)
@@ -931,6 +982,7 @@ class WhisperTimeStampLogitsProcessor(LogitsProcessor):
                     predicting timestamps that are too far in the future.
     """
 
+    @measure_times
     def __init__(self, generate_config):  # support for the kwargs
         self.eos_token_id = generate_config.eos_token_id
         self.no_timestamps_token_id = generate_config.no_timestamps_token_id
@@ -941,6 +993,7 @@ class WhisperTimeStampLogitsProcessor(LogitsProcessor):
             self.begin_index -= 1
         self.max_initial_timestamp_index = generate_config.max_initial_timestamp_index
 
+    @measure_times
     def __call__(self, input_ids, scores):
         # suppress <|notimestamps|> which is handled by without_timestamps
         scores[:, self.no_timestamps_token_id] = -float("inf")
