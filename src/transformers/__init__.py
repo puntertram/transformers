@@ -45,6 +45,8 @@ from .utils import (
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
+print("[transformers] This is the custom changes from branch main...")
+
 # Base objects, independent of any specific backend
 _import_structure = {
     "benchmark": [],
