@@ -204,7 +204,6 @@ class BeamSearchScorer(BeamScorer):
             )
 
     @property
-    @measure_times
     def is_done(self) -> bool:
         return self._done.all()
 
