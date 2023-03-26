@@ -1,0 +1,19 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "/home/puneeth_artemis/anaconda3/envs/mtech_project_custom_beam_search/lib/python3.9/site-packages/torch/include/**",
+                "${workspaceFolder}/**",
+                "/home/puneeth_artemis/anaconda3/envs/mtech_project_custom_beam_search/include/python3.9/**"
+                
+            ],
+            "defines": [],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c17",
+            "cppStandard": "gnu++14",
+            "intelliSenseMode": "linux-gcc-x64"
+        }
+    ],
+    "version": 4
+}

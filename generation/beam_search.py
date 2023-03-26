@@ -101,6 +101,8 @@ class BeamScorer(ABC):
         next_scores: torch.FloatTensor,
         next_tokens: torch.LongTensor,
         next_indices: torch.LongTensor,
+        beam_hypotheses: torch.FloatTensor,
+        beam_hypotheses_meta: torch.FloatTensor,
         **kwargs
     ) -> Tuple[torch.Tensor]:
         raise NotImplementedError("This is an abstract method.")
@@ -217,9 +219,13 @@ class BeamSearchScorer(BeamScorer):
         next_scores: torch.FloatTensor,
         next_tokens: torch.LongTensor,
         next_indices: torch.LongTensor,
+        beam_hypotheses: torch.FloatTensor,
+        beam_hypotheses_meta: torch.FloatTensor,
+        stopping_criteria,
         pad_token_id: Optional[int] = None,
         eos_token_id: Optional[int] = None,
         beam_indices: Optional[torch.LongTensor] = None,
+        
     ) -> Tuple[torch.Tensor]:
         cur_len = input_ids.shape[-1]
         batch_size = len(self._beam_hyps)
@@ -240,12 +246,100 @@ class BeamSearchScorer(BeamScorer):
         next_beam_tokens = torch.zeros((batch_size, self.group_size), dtype=next_tokens.dtype, device=device)
         next_beam_indices = torch.zeros((batch_size, self.group_size), dtype=next_indices.dtype, device=device)
 
+
+        if eos_token_id is None or pad_token_id is None:
+            raise ValueError(
+                "Generated beams >= num_beams -> eos_token_id and pad_token have to be defined")
+        # beam_indices = []
+        # if beam_indices is None:
+        if True:
+            import logits_process_cuda
+            n_input_ids = input_ids.to(torch.float32)
+            n_done = self._done.to(torch.float32)
+            n_next_scores = next_scores.to(torch.float32)
+            n_next_tokens = next_tokens.to(torch.float32)
+            n_next_indices = next_indices.to(torch.float32)
+            n_next_beam_indices = next_beam_indices.to(torch.float32)
+            n_next_beam_tokens = next_beam_tokens.to(torch.float32)
+            n_next_beam_scores = next_beam_scores.to(torch.float32)
+            _beam_hyp = logits_process_cuda._beam_search_process(
+                int(batch_size),
+                int(self.group_size),
+                float(pad_token_id),
+                float(eos_token_id),
+                stopping_criteria.max_length,
+                1,
+                self.length_penalty,
+                n_input_ids,
+                n_next_scores,
+                n_next_tokens,
+                n_next_indices,
+                n_next_beam_scores,
+                n_next_beam_tokens,
+                n_next_beam_indices,
+                n_done,
+                beam_hypotheses,
+                beam_hypotheses_meta 
+            )
+            # torch.cuda.synchronize()
+            # print(_beam_hyp)
+            # n_next_beam_tokens = n_next_beam_tokens.to(torch.long)
+            # n_next_beam_indices = n_next_beam_indices.to(torch.long)
+            next_beam_scores = n_next_beam_scores
+            next_beam_tokens = n_next_beam_tokens.to(torch.long)
+            next_beam_indices = n_next_beam_indices.to(torch.long)
+            self._done = n_done.to(torch.bool)
+        else:
+            self.process_cpu( 
+                input_ids, 
+                next_scores,
+                next_tokens,
+                next_indices,
+                next_beam_scores,
+                next_beam_tokens,
+                next_beam_indices,
+                cur_len,
+                pad_token_id,
+                eos_token_id,
+                beam_indices
+            )
+            # torch.cuda.synchronize()
+            # print("cpu...")
+            # assert torch.all(n_done == next_beam_tokens), "n_next_beam_tokens == next_beam_tokens break"
+            # assert torch.all(n_next_beam_tokens == next_beam_tokens), "n_next_beam_tokens == next_beam_tokens break"
+            # assert torch.all(n_next_beam_scores == next_beam_scores), "n_next_beam_scores == next_beam_scores break"
+            # assert torch.all(n_next_beam_indices == next_beam_indices), "n_next_beam_indices == next_beam_indices break"
+            
+        return UserDict(
+            {
+                "next_beam_scores": next_beam_scores.view(-1),
+                "next_beam_tokens": next_beam_tokens.view(-1),
+                "next_beam_indices": next_beam_indices.view(-1)
+            }
+        )
+
+    def process_cpu(
+            self,
+        input_ids: torch.LongTensor,
+        next_scores: torch.FloatTensor,
+        next_tokens: torch.LongTensor,
+        next_indices: torch.LongTensor,
+        next_beam_scores: torch.FloatTensor,
+        next_beam_tokens: torch.FloatTensor,
+        next_beam_indices: torch.FloatTensor,
+        cur_len,
+        pad_token_id: Optional[int] = None,
+        eos_token_id: Optional[int] = None,
+        beam_indices: Optional[torch.LongTensor] = None,
+    ):
         for batch_idx, beam_hyp in enumerate(self._beam_hyps):
             if self._done[batch_idx]:
                 if self.num_beams < len(beam_hyp):
-                    raise ValueError(f"Batch can only be done if at least {self.num_beams} beams have been generated")
+                    raise ValueError(
+                        f"Batch can only be done if at least {self.num_beams} beams have been generated")
                 if eos_token_id is None or pad_token_id is None:
-                    raise ValueError("Generated beams >= num_beams -> eos_token_id and pad_token have to be defined")
+                    raise ValueError(
+                        "Generated beams >= num_beams -> eos_token_id and pad_token have to be defined")
                 # pad the batch
                 next_beam_scores[batch_idx, :] = 0
                 next_beam_tokens[batch_idx, :] = pad_token_id
@@ -255,7 +349,8 @@ class BeamSearchScorer(BeamScorer):
             # next tokens for this sentence
             beam_idx = 0
             for beam_token_rank, (next_token, next_score, next_index) in enumerate(
-                zip(next_tokens[batch_idx], next_scores[batch_idx], next_indices[batch_idx])
+                zip(next_tokens[batch_idx],
+                    next_scores[batch_idx], next_indices[batch_idx])
             ):
                 batch_beam_idx = batch_idx * self.group_size + next_index
                 # add to generated hypotheses if end of sentence
@@ -271,12 +366,13 @@ class BeamSearchScorer(BeamScorer):
                         beam_index = None
 
                     beam_hyp.add(
-                        input_ids[batch_beam_idx].clone(),
+                        input_ids[batch_beam_idx],
                         next_score.item(),
                         beam_indices=beam_index,
                     )
                 else:
                     # add next predicted token since it is not eos_token
+                    # print(f"[cpu][{batch_idx}][{beam_idx}]  Adding {next_score}, {next_token}, {batch_beam_idx}")
                     next_beam_scores[batch_idx, beam_idx] = next_score
                     next_beam_tokens[batch_idx, beam_idx] = next_token
                     next_beam_indices[batch_idx, beam_idx] = batch_beam_idx
@@ -297,14 +393,6 @@ class BeamSearchScorer(BeamScorer):
                 next_scores[batch_idx].max().item(), cur_len
             )
 
-        return UserDict(
-            {
-                "next_beam_scores": next_beam_scores.view(-1),
-                "next_beam_tokens": next_beam_tokens.view(-1),
-                "next_beam_indices": next_beam_indices.view(-1),
-            }
-        )
-
     @measure_times
     def finalize(
         self,
@@ -313,6 +401,94 @@ class BeamSearchScorer(BeamScorer):
         final_beam_tokens: torch.LongTensor,
         final_beam_indices: torch.LongTensor,
         max_length: int,
+        beam_hypotheses,
+        beam_hypotheses_meta,
+        pad_token_id: Optional[int] = None,
+        eos_token_id: Optional[int] = None,
+        beam_indices: Optional[torch.LongTensor] = None,
+    ) -> Tuple[torch.LongTensor]:
+        
+        batch_size = len(self._beam_hyps)
+
+        # if beam_indices is not None:
+        if False:
+            return self.finalize_cpu(
+                input_ids=input_ids,
+                final_beam_scores=final_beam_scores,
+                final_beam_tokens=final_beam_tokens,
+                final_beam_indices=final_beam_indices,
+                max_length=max_length,
+                beam_hypotheses=beam_hypotheses,
+                beam_hypotheses_meta=beam_hypotheses_meta,
+                pad_token_id=pad_token_id,
+                eos_token_id=eos_token_id,
+                beam_indices=beam_indices
+            )
+        else:
+            import logits_process_cuda
+            n_done = self._done.to(torch.float32)
+            n_input_ids = input_ids.to(torch.float32)
+            logits_process_cuda._beam_search_finalize(
+                batch_size,
+                self.num_beams,
+                self.num_beam_hyps_to_keep,
+                n_input_ids,
+                final_beam_scores,
+                beam_hypotheses,
+                beam_hypotheses_meta,
+                n_done
+            )
+            # prepare for adding eos
+            beam_hypotheses = beam_hypotheses.to("cpu")
+            beam_hypotheses_meta = beam_hypotheses_meta.to("cpu")
+            sent_lengths = torch.zeros(batch_size * self.num_beam_hyps_to_keep, device="cpu", dtype=torch.long)
+            best = [None] * (batch_size * self.num_beam_hyps_to_keep)
+            best_scores = torch.zeros(batch_size * self.num_beam_hyps_to_keep, device="cpu")
+            for batch_idx in range(batch_size):
+                for j in range(self.num_beams):
+                    if beam_hypotheses[batch_idx][j][3] != -1:
+                        sent_lengths[batch_idx * self.num_beam_hyps_to_keep + int(beam_hypotheses[batch_idx][j][3].item())] = int(beam_hypotheses[batch_idx][j][0].item())
+                        best[batch_idx * self.num_beam_hyps_to_keep + int(beam_hypotheses[batch_idx][j][3].item())] = beam_hypotheses[batch_idx][j][4: 4 + int(beam_hypotheses[batch_idx][j][0].item())]
+                        best_scores[batch_idx * self.num_beam_hyps_to_keep + int(beam_hypotheses[batch_idx][j][3].item())] = beam_hypotheses[batch_idx][j][1]
+            sent_lengths_max = int(sent_lengths.max().item()) + 1
+            sent_max_len = min(sent_lengths_max, max_length) if max_length is not None else sent_lengths_max
+            decoded: torch.LongTensor = torch.zeros(batch_size * self.num_beam_hyps_to_keep, sent_max_len, device="cpu", dtype=torch.long)
+            # TODO start work from here
+            indices = None
+
+            # shorter batches are padded if needed
+            if sent_lengths.min().item() != sent_lengths.max().item():
+                assert pad_token_id is not None, "`pad_token_id` has to be defined"
+                decoded.fill_(pad_token_id)
+
+            if indices is not None:
+                indices.fill_(-1)
+
+            # fill with hypotheses and eos_token_id if the latter fits in
+            for i, hypo in enumerate(best):
+                decoded[i, : sent_lengths[i]] = hypo
+
+                if sent_lengths[i] < sent_max_len:
+                    decoded[i, sent_lengths[i]] = eos_token_id
+
+            return UserDict(
+                {
+                    "sequences": decoded,
+                    "sequence_scores": best_scores,
+                    "beam_indices": indices,
+                }
+            )
+
+    @measure_times
+    def finalize_cpu(
+        self,
+        input_ids: torch.LongTensor,
+        final_beam_scores: torch.FloatTensor,
+        final_beam_tokens: torch.LongTensor,
+        final_beam_indices: torch.LongTensor,
+        max_length: int,
+        beam_hypotheses,
+        beam_hypotheses_meta,
         pad_token_id: Optional[int] = None,
         eos_token_id: Optional[int] = None,
         beam_indices: Optional[torch.LongTensor] = None,
@@ -338,6 +514,7 @@ class BeamSearchScorer(BeamScorer):
         best = []
         best_indices = []
         best_scores = torch.zeros(batch_size * self.num_beam_hyps_to_keep, device=self.device, dtype=torch.float32)
+
 
         # retrieve best hypotheses
         for i, beam_hyp in enumerate(self._beam_hyps):
@@ -502,6 +679,8 @@ class ConstrainedBeamSearchScorer(BeamScorer):
         next_tokens: torch.LongTensor,
         next_indices: torch.LongTensor,
         scores_for_all_vocab: torch.FloatTensor,
+        beam_hypotheses: torch.FloatTensor,
+        beam_hypotheses_meta: torch.FloatTensor,
         pad_token_id: Optional[int] = None,
         eos_token_id: Optional[int] = None,
     ) -> Tuple[torch.Tensor]:
@@ -785,6 +964,8 @@ class ConstrainedBeamSearchScorer(BeamScorer):
         final_beam_scores: torch.FloatTensor,
         final_beam_tokens: torch.LongTensor,
         final_beam_indices: torch.LongTensor,
+        beam_hypotheses,
+        beam_hypotheses_meta,
         max_length: int,
         pad_token_id: Optional[int] = None,
         eos_token_id: Optional[int] = None,

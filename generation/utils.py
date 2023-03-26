@@ -2809,6 +2809,8 @@ class GenerationMixin:
         beam_scores = beam_scores.view((batch_size * num_beams,))
 
         this_peer_finished = False  # used by synced_gpus only
+        beam_hypotheses = torch.zeros(batch_size, num_beams, stopping_criteria.max_length + 4, device="cuda")
+        beam_hypotheses_meta = torch.zeros(batch_size, 3, device="cuda")
         while True:
             if synced_gpus:
                 # Under synced_gpus the `forward` call must continue until all gpus complete their sequence.
@@ -2874,6 +2876,7 @@ class GenerationMixin:
             next_indices = torch_int_div(next_tokens, vocab_size)
             next_tokens = next_tokens % vocab_size
 
+            # print(f"Start step {cur_len}")
             # stateless
             beam_outputs = beam_scorer.process(
                 input_ids,
@@ -2882,12 +2885,16 @@ class GenerationMixin:
                 next_indices,
                 pad_token_id=pad_token_id,
                 eos_token_id=eos_token_id,
+                stopping_criteria=stopping_criteria,
                 beam_indices=beam_indices,
+                beam_hypotheses=beam_hypotheses,
+                beam_hypotheses_meta=beam_hypotheses_meta
             )
 
             beam_scores = beam_outputs["next_beam_scores"]
             beam_next_tokens = beam_outputs["next_beam_tokens"]
             beam_idx = beam_outputs["next_beam_indices"]
+            # _beam_hyp = beam_outputs["_beam_hyp"]
 
             input_ids = torch.cat([input_ids[beam_idx, :], beam_next_tokens.unsqueeze(-1)], dim=-1)
 
@@ -2902,13 +2909,25 @@ class GenerationMixin:
 
             # increase cur_len
             cur_len = cur_len + 1
-
+            # if cur_len >= 30:
+            #     break
             if beam_scorer.is_done or stopping_criteria(input_ids, scores):
                 if not synced_gpus:
                     break
                 else:
                     this_peer_finished = True
-
+        # print(_beam_hyp)
+        # if beam_indices is not None:
+        if False:
+            beam_hypotheses = beam_hypotheses.cpu()
+            beam_hypotheses_meta = beam_hypotheses_meta.cpu()
+            for batch_idx, beam_hyp in enumerate(beam_scorer._beam_hyps):
+                for idx in range(int(beam_hypotheses_meta[batch_idx][0].item())):
+                    beam_hyp.add(
+                        beam_hypotheses[batch_idx][idx][4:4+int(beam_hypotheses[batch_idx][idx][0].item())],
+                        beam_hypotheses[batch_idx][idx][1].item(),
+                        None
+                    )
         sequence_outputs = beam_scorer.finalize(
             input_ids,
             beam_scores,
@@ -2918,6 +2937,8 @@ class GenerationMixin:
             eos_token_id=eos_token_id,
             max_length=stopping_criteria.max_length,
             beam_indices=beam_indices,
+            beam_hypotheses=beam_hypotheses,
+            beam_hypotheses_meta=beam_hypotheses_meta
         )
 
         if return_dict_in_generate:
