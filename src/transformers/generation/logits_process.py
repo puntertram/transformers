@@ -515,8 +515,8 @@ class NoRepeatNGramLogitsProcessor(LogitsProcessor):
         # for i, banned_tokens in enumerate(banned_batch_tokens):
         #     temp_scores[i, banned_tokens] = -10000.0
         if not (cur_len < self.ngram_size):
-            import logits_process_cuda
-            logits_process_cuda._get_ngrams(self.ngram_size, input_ids.type(torch.float32), scores, num_batch_hypotheses)
+            import custom_beam_search_cuda
+            custom_beam_search_cuda._get_ngrams(self.ngram_size, input_ids.type(torch.float32), scores, num_batch_hypotheses)
         # assert (scores == temp_scores).all()
         return scores
 
