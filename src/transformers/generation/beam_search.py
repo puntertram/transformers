@@ -242,7 +242,7 @@ class BeamSearchScorer(BeamScorer):
         # beam_indices = []
         # if beam_indices is None:
         if True:
-            import logits_process_cuda
+            import custom_beam_search_cuda
             n_input_ids = input_ids.to(torch.float32)
             n_done = self._done.to(torch.float32)
             n_next_scores = next_scores.to(torch.float32)
@@ -251,11 +251,11 @@ class BeamSearchScorer(BeamScorer):
             n_next_beam_indices = next_beam_indices.to(torch.float32)
             n_next_beam_tokens = next_beam_tokens.to(torch.float32)
             n_next_beam_scores = next_beam_scores.to(torch.float32)
-            _beam_hyp = logits_process_cuda._beam_search_process(
+            _beam_hyp = custom_beam_search_cuda._beam_search_process(
                 int(batch_size),
                 int(self.group_size),
                 float(pad_token_id),
-                float(eos_token_id),
+                float(eos_token_id[0]),
                 stopping_criteria.max_length,
                 1,
                 self.length_penalty,
@@ -413,10 +413,10 @@ class BeamSearchScorer(BeamScorer):
                 beam_indices=beam_indices
             )
         else:
-            import logits_process_cuda
+            import custom_beam_search_cuda
             n_done = self._done.to(torch.float32)
             n_input_ids = input_ids.to(torch.float32)
-            logits_process_cuda._beam_search_finalize(
+            custom_beam_search_cuda._beam_search_finalize(
                 batch_size,
                 self.num_beams,
                 self.num_beam_hyps_to_keep,
@@ -457,7 +457,7 @@ class BeamSearchScorer(BeamScorer):
                 decoded[i, : sent_lengths[i]] = hypo
 
                 if sent_lengths[i] < sent_max_len:
-                    decoded[i, sent_lengths[i]] = eos_token_id
+                    decoded[i, sent_lengths[i]] = eos_token_id[0]
 
             return UserDict(
                 {
