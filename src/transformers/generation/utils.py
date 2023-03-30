@@ -2730,6 +2730,8 @@ class GenerationMixin:
         beam_scores = torch.zeros((batch_size, num_beams), dtype=torch.float, device=input_ids.device)
         beam_scores[:, 1:] = -1e9
         beam_scores = beam_scores.view((batch_size * num_beams,))
+        beam_hypotheses = torch.zeros(batch_size, num_beams, stopping_criteria.max_length + 4, device="cuda")
+        beam_hypotheses_meta = torch.zeros(batch_size, 3, device="cuda")
 
         this_peer_finished = False  # used by synced_gpus only
         while True:
@@ -2805,7 +2807,10 @@ class GenerationMixin:
                 next_indices,
                 pad_token_id=pad_token_id,
                 eos_token_id=eos_token_id,
+                stopping_criteria=stopping_criteria,
                 beam_indices=beam_indices,
+                beam_hypotheses=beam_hypotheses,
+                beam_hypotheses_meta=beam_hypotheses_meta
             )
 
             beam_scores = beam_outputs["next_beam_scores"]
@@ -2831,7 +2836,16 @@ class GenerationMixin:
                     break
                 else:
                     this_peer_finished = True
-
+        if False:
+            beam_hypotheses = beam_hypotheses.cpu()
+            beam_hypotheses_meta = beam_hypotheses_meta.cpu()
+            for batch_idx, beam_hyp in enumerate(beam_scorer._beam_hyps):
+                for idx in range(int(beam_hypotheses_meta[batch_idx][0].item())):
+                    beam_hyp.add(
+                        beam_hypotheses[batch_idx][idx][4:4+int(beam_hypotheses[batch_idx][idx][0].item())],
+                        beam_hypotheses[batch_idx][idx][1].item(),
+                        None
+                    )
         sequence_outputs = beam_scorer.finalize(
             input_ids,
             beam_scores,
@@ -2841,6 +2855,8 @@ class GenerationMixin:
             eos_token_id=eos_token_id,
             max_length=stopping_criteria.max_length,
             beam_indices=beam_indices,
+            beam_hypotheses=beam_hypotheses,
+            beam_hypotheses_meta=beam_hypotheses_meta
         )
 
         if return_dict_in_generate:
