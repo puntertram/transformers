@@ -503,18 +503,22 @@ class NoRepeatNGramLogitsProcessor(LogitsProcessor):
 
     def __init__(self, ngram_size: int):
         if not isinstance(ngram_size, int) or ngram_size <= 0:
-            raise ValueError(f"`ngram_size` has to be a strictly positive integer, but is {ngram_size}")
+            raise ValueError(
+                f"`ngram_size` has to be a strictly positive integer, but is {ngram_size}")
         self.ngram_size = ngram_size
 
     @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         num_batch_hypotheses = scores.shape[0]
         cur_len = input_ids.shape[-1]
-        banned_batch_tokens = _calc_banned_ngram_tokens(self.ngram_size, input_ids, num_batch_hypotheses, cur_len)
-
-        for i, banned_tokens in enumerate(banned_batch_tokens):
-            scores[i, banned_tokens] = -float("inf")
-
+        # banned_batch_tokens = _calc_banned_ngram_tokens(self.ngram_size, input_ids, num_batch_hypotheses, cur_len)
+        # temp_scores = scores.clone()
+        # for i, banned_tokens in enumerate(banned_batch_tokens):
+        #     temp_scores[i, banned_tokens] = -10000.0
+        if not (cur_len < self.ngram_size):
+            import logits_process_cuda
+            logits_process_cuda._get_ngrams(self.ngram_size, input_ids.type(torch.float32), scores, num_batch_hypotheses)
+        # assert (scores == temp_scores).all()
         return scores
 
 
