@@ -2814,6 +2814,8 @@ class GenerationMixin:
 
             input_ids = torch.cat([input_ids[beam_idx, :], beam_next_tokens.unsqueeze(-1)], dim=-1)
 
+            self.reorder_logit_processor_state(logits_processor, beam_idx)
+
             model_kwargs = self._update_model_kwargs_for_generation(
                 outputs, model_kwargs, is_encoder_decoder=self.config.is_encoder_decoder
             )
@@ -2870,6 +2872,16 @@ class GenerationMixin:
                 )
         else:
             return sequence_outputs["sequences"]
+
+    @measure_times
+    def reorder_logit_processor_state(
+        self, 
+        logits_processor,
+        beam_idx
+    ):
+       for logit_processor in logits_processor:
+           if isinstance(logit_processor, NoRepeatNGramLogitsProcessor):
+               logit_processor.reorder_state(beam_idx) 
 
     @measure_times
     def beam_sample(
