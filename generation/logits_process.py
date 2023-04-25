@@ -513,9 +513,10 @@ class NoRepeatNGramLogitsProcessor(LogitsProcessor):
     def reorder_state(self, beam_idx):
         if self.cur_idx < 0:
             return
-        nstate = [[]] * len(beam_idx)
-        for i in range(beam_idx.shape[0]):
-            nstate[i] = copy.deepcopy(self.state[beam_idx[i]])
+        h_beam_idx = beam_idx.to("cpu")
+        nstate = [[]] * len(h_beam_idx)
+        for i in range(h_beam_idx.shape[0]):
+            nstate[i] = copy.deepcopy(self.state[h_beam_idx[i]])
         self.state = nstate
 
 
@@ -527,7 +528,7 @@ class NoRepeatNGramLogitsProcessor(LogitsProcessor):
             self.cur_idx = cur_len - self.ngram_size
             if self.state is None:
                 self.state = [{}] * input_ids.shape[0]
-            ret = cpu_accel.NoRepeatNGramLogitsProcessor(int(self.ngram_size), self.state, self.cur_idx, input_ids, scores, int(scores.shape[0]), 6)
+            ret = cpu_accel.NoRepeatNGramLogitsProcessor(int(self.ngram_size), self.state, self.cur_idx, input_ids, scores, int(scores.shape[0]), 2)
             if len(ret) == 0:
                 # Do nothing
                 pass
@@ -546,8 +547,9 @@ class NoRepeatNGramLogitsProcessor(LogitsProcessor):
             # for i, banned_tokens_ in enumerate(t_banned_batch_tokens):
             #     t_scores[i, banned_tokens_] = -10000.0
 
-            # # assert banned_tokens == t_banned_batch_tokens
+            # # # assert banned_tokens == t_banned_batch_tokens
             # assert torch.all(torch.abs(scores - t_scores) <= 1e-6)
+            # assert t_generated_ngrams == self.state
             # print(banned_tokens)
         # print("Finished...")
         return scores
