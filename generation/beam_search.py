@@ -289,8 +289,8 @@ class BeamSearchScorer(BeamScorer):
                 for beam in beam_hyps[idx]:
                     new_beams.append((beam[0], beam[1], None))
                 beam_hyp.beams = new_beams
-            print("...")
-        else:
+            # print("...")
+        # else:
             device = input_ids.device
             next_beam_scores = torch.zeros((batch_size, self.group_size), dtype=next_scores.dtype, device=device)
             next_beam_tokens = torch.zeros((batch_size, self.group_size), dtype=next_tokens.dtype, device=device)
@@ -324,7 +324,7 @@ class BeamSearchScorer(BeamScorer):
                             beam_index = beam_index + (batch_beam_idx,)
                         else:
                             beam_index = None
-
+                        # print(f"[baseline]Adding {input_ids[batch_beam_idx]}, {next_score}...")
                         beam_hyp.add(
                             input_ids[batch_beam_idx].clone(),
                             next_score.item(),
