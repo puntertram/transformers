@@ -502,19 +502,20 @@ class NoRepeatNGramLogitsProcessor(LogitsProcessor):
             All ngrams of size `ngram_size` can only occur once.
     """
 
-    def __init__(self, ngram_size: int):
+    def __init__(self, ngram_size: int, number_of_threads):
         if not isinstance(ngram_size, int) or ngram_size <= 0:
             raise ValueError(f"`ngram_size` has to be a strictly positive integer, but is {ngram_size}")
         self.ngram_size = ngram_size
         self.state = None
         self.cur_idx = -1
+        self.number_of_threads = number_of_threads
 
     @measure_times
     def reorder_state(self, beam_idx):
         if self.cur_idx < 0:
             return
         h_beam_idx = beam_idx.to("cpu")
-        nstate = [[]] * len(h_beam_idx)
+        nstate = [{}] * len(h_beam_idx)
         for i in range(h_beam_idx.shape[0]):
             nstate[i] = copy.deepcopy(self.state[h_beam_idx[i]])
         self.state = nstate
@@ -522,13 +523,13 @@ class NoRepeatNGramLogitsProcessor(LogitsProcessor):
 
     @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
-        import cpu_accel
+        import cpu_accel_two
         cur_len = input_ids.shape[1]
         if cur_len >= self.ngram_size:
             self.cur_idx = cur_len - self.ngram_size
             if self.state is None:
                 self.state = [{}] * input_ids.shape[0]
-            ret = cpu_accel.NoRepeatNGramLogitsProcessor(int(self.ngram_size), self.state, self.cur_idx, input_ids, scores, int(scores.shape[0]), 2)
+            ret = cpu_accel_two.NoRepeatNGramLogitsProcessor(int(self.ngram_size), self.state, self.cur_idx, input_ids, scores, int(scores.shape[0]), self.number_of_threads)
             if len(ret) == 0:
                 # Do nothing
                 pass
