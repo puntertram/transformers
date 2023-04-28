@@ -178,7 +178,8 @@ class BeamSearchScorer(BeamScorer):
         self.num_beam_hyps_to_keep = num_beam_hyps_to_keep
         self.num_beam_groups = num_beam_groups
         self.group_size = self.num_beams // self.num_beam_groups
-
+        self.max_length = max_length
+        
         self._is_init = False
         self._beam_hyps = [
             BeamHypotheses(
