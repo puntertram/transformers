@@ -488,7 +488,7 @@ def _calc_banned_ngram_tokens(
         _get_generated_ngrams(generated_ngrams[hypo_idx], prev_input_ids[hypo_idx], ngram_size, cur_len)
         for hypo_idx in range(num_hypos)
     ]
-    return banned_tokens
+    return banned_tokens, generated_ngrams
 
 
 class NoRepeatNGramLogitsProcessor(LogitsProcessor):
@@ -514,22 +514,20 @@ class NoRepeatNGramLogitsProcessor(LogitsProcessor):
         if cur_len >= self.ngram_size:
             self.cur_idx = cur_len - self.ngram_size
             t_scores = scores.clone()
-            if self.state is None:
-                self.state = [{}] * input_ids.shape[0]
             
-            banned_tokens = custom_beam_search_cpu.NoRepeatNGramLogitsProcessor(int(self.ngram_size), input_ids, scores, int(scores.shape[0]), self.number_of_threads)
+            banned_tokens, generated_ngrams = custom_beam_search_cpu.NoRepeatNGramLogitsProcessor(int(self.ngram_size), input_ids, scores, int(scores.shape[0]), self.number_of_threads)
             t_num_batch_hypotheses = t_scores.shape[0]
             t_cur_len = input_ids.shape[-1]
-            t_banned_batch_tokens = _calc_banned_ngram_tokens(self.ngram_size, input_ids, t_num_batch_hypotheses, t_cur_len)
+            t_banned_batch_tokens, t_generated_ngrams = _calc_banned_ngram_tokens(self.ngram_size, input_ids, t_num_batch_hypotheses, t_cur_len)
 
             for i, banned_tokens_ in enumerate(t_banned_batch_tokens):
                 t_scores[i, banned_tokens_] = -10000.0
 
+            assert generated_ngrams == t_generated_ngrams
             assert banned_tokens == t_banned_batch_tokens
             assert torch.all(torch.abs(scores - t_scores) <= 1e-6)
             # assert t_generated_ngrams == self.state
-            print(banned_tokens)
-        # print("Finished...")
+            # print(banned_tokens)
         return scores
 
 
