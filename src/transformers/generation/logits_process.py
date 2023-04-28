@@ -17,6 +17,7 @@ import inspect
 import math
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
+import copy 
 import numpy as np
 import torch
 
@@ -488,7 +489,7 @@ def _calc_banned_ngram_tokens(
         _get_generated_ngrams(generated_ngrams[hypo_idx], prev_input_ids[hypo_idx], ngram_size, cur_len)
         for hypo_idx in range(num_hypos)
     ]
-    return banned_tokens
+    return banned_tokens, generated_ngrams
 
 
 class NoRepeatNGramLogitsProcessor(LogitsProcessor):
@@ -501,20 +502,57 @@ class NoRepeatNGramLogitsProcessor(LogitsProcessor):
             All ngrams of size `ngram_size` can only occur once.
     """
 
-    def __init__(self, ngram_size: int):
+    def __init__(self, ngram_size: int, number_of_threads):
         if not isinstance(ngram_size, int) or ngram_size <= 0:
             raise ValueError(f"`ngram_size` has to be a strictly positive integer, but is {ngram_size}")
         self.ngram_size = ngram_size
+        self.state = None
+        self.cur_idx = -1
+        self.number_of_threads = number_of_threads
+
+    @measure_times
+    def reorder_state(self, beam_idx):
+        if self.cur_idx < 0:
+            return
+        h_beam_idx = beam_idx.to("cpu")
+        nstate = [{}] * len(h_beam_idx)
+        for i in range(h_beam_idx.shape[0]):
+            nstate[i] = copy.deepcopy(self.state[h_beam_idx[i]])
+        self.state = nstate
+
 
     @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
-        num_batch_hypotheses = scores.shape[0]
-        cur_len = input_ids.shape[-1]
-        banned_batch_tokens = _calc_banned_ngram_tokens(self.ngram_size, input_ids, num_batch_hypotheses, cur_len)
+        import cpu_accel_two
+        cur_len = input_ids.shape[1]
+        if cur_len >= self.ngram_size:
+            self.cur_idx = cur_len - self.ngram_size
+            if self.state is None:
+                self.state = [{}] * input_ids.shape[0]
+            ret, banned_tokens = cpu_accel_two.NoRepeatNGramLogitsProcessor(int(self.ngram_size), self.state, self.cur_idx, input_ids, scores, int(scores.shape[0]), self.number_of_threads)
+            if len(ret) == 0:
+                # Do nothing
+                pass
+            else:
+                for idx, r in enumerate(ret):
+                    D = {}
+                    for entry in r:
+                        D[tuple(entry[0])] = entry[1]
+                    self.state[idx] = D
+                # self.state = [dict(r) for r in ret]
+            # t_scores = scores.clone()
+            # t_num_batch_hypotheses = t_scores.shape[0]
+            # t_cur_len = input_ids.shape[-1]
+            # t_banned_batch_tokens, t_generated_ngrams = _calc_banned_ngram_tokens(self.ngram_size, input_ids, t_num_batch_hypotheses, t_cur_len)
 
-        for i, banned_tokens in enumerate(banned_batch_tokens):
-            scores[i, banned_tokens] = -float("inf")
+            # for i, banned_tokens_ in enumerate(t_banned_batch_tokens):
+            #     t_scores[i, banned_tokens_] = -10000.0
 
+            # assert banned_tokens == t_banned_batch_tokens
+            # assert torch.all(torch.abs(scores - t_scores) <= 1e-6)
+            # assert t_generated_ngrams == self.state
+            # print(banned_tokens)
+        # print("Finished...")
         return scores
 
 
