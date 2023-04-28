@@ -1018,6 +1018,12 @@ class BeamHypotheses:
         """
         return len(self.beams)
 
+    def to_list(self):
+        hyps = []
+        for hyp in self.beams:
+            hyps.append(hyp) 
+        return hyps
+
     def add(self, hyp: torch.LongTensor, sum_logprobs: float, beam_indices: Optional[torch.LongTensor] = None):
         """
         Add a new hypothesis to the list.

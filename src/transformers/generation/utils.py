@@ -1494,6 +1494,7 @@ class GenerationMixin:
                 output_scores=generation_config.output_scores,
                 return_dict_in_generate=generation_config.return_dict_in_generate,
                 synced_gpus=synced_gpus,
+                number_of_threads=number_of_threads,
                 **model_kwargs,
             )
 
