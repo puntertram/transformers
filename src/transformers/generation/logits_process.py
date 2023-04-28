@@ -501,14 +501,15 @@ class NoRepeatNGramLogitsProcessor(LogitsProcessor):
             All ngrams of size `ngram_size` can only occur once.
     """
 
-    def __init__(self, ngram_size: int):
+    def __init__(self, ngram_size: int, number_of_threads):
         if not isinstance(ngram_size, int) or ngram_size <= 0:
             raise ValueError(f"`ngram_size` has to be a strictly positive integer, but is {ngram_size}")
         self.ngram_size = ngram_size
+        self.number_of_threads = number_of_threads
 
     @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
-        import custom_beam_searc_cpu
+        import custom_beam_search_cpu
         cur_len = input_ids.shape[1]
         if cur_len >= self.ngram_size:
             self.cur_idx = cur_len - self.ngram_size
