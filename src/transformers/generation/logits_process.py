@@ -523,13 +523,15 @@ class NoRepeatNGramLogitsProcessor(LogitsProcessor):
 
     @measure_times
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
-        import cpu_accel_two
+        import custom_beam_search_cpu
         cur_len = input_ids.shape[1]
         if cur_len >= self.ngram_size:
             self.cur_idx = cur_len - self.ngram_size
             if self.state is None:
                 self.state = [{}] * input_ids.shape[0]
-            ret, banned_tokens = cpu_accel_two.NoRepeatNGramLogitsProcessor(int(self.ngram_size), self.state, self.cur_idx, input_ids, scores, int(scores.shape[0]), self.number_of_threads)
+            # t_scores = scores.clone()
+
+            ret, banned_tokens = custom_beam_search_cpu.NoRepeatNGramLogitsProcessor(int(self.ngram_size), self.state, self.cur_idx, input_ids, scores, int(scores.shape[0]), self.number_of_threads)
             if len(ret) == 0:
                 # Do nothing
                 pass
@@ -540,7 +542,7 @@ class NoRepeatNGramLogitsProcessor(LogitsProcessor):
                         D[tuple(entry[0])] = entry[1]
                     self.state[idx] = D
                 # self.state = [dict(r) for r in ret]
-            # t_scores = scores.clone()
+            
             # t_num_batch_hypotheses = t_scores.shape[0]
             # t_cur_len = input_ids.shape[-1]
             # t_banned_batch_tokens, t_generated_ngrams = _calc_banned_ngram_tokens(self.ngram_size, input_ids, t_num_batch_hypotheses, t_cur_len)
