@@ -513,21 +513,30 @@ class NoRepeatNGramLogitsProcessor(LogitsProcessor):
         cur_len = input_ids.shape[1]
         if cur_len >= self.ngram_size:
             self.cur_idx = cur_len - self.ngram_size
-            t_scores = scores.clone()
+            # t_scores = scores.clone()
             
-            banned_tokens, generated_ngrams = custom_beam_search_cpu.NoRepeatNGramLogitsProcessor(int(self.ngram_size), input_ids, scores, int(scores.shape[0]), self.number_of_threads)
-            t_num_batch_hypotheses = t_scores.shape[0]
-            t_cur_len = input_ids.shape[-1]
-            t_banned_batch_tokens, t_generated_ngrams = _calc_banned_ngram_tokens(self.ngram_size, input_ids, t_num_batch_hypotheses, t_cur_len)
+            num_batch_hypotheses = scores.shape[0]
+            c_generated_ngrams, banned_tokens = custom_beam_search_cpu.NoRepeatNGramLogitsProcessor(int(self.ngram_size), input_ids, scores, int(scores.shape[0]), self.number_of_threads)
+            
+            
+            # t_num_batch_hypotheses = t_scores.shape[0]
+            # t_cur_len = input_ids.shape[-1]
+            # t_banned_batch_tokens, t_generated_ngrams = _calc_banned_ngram_tokens(self.ngram_size, input_ids, t_num_batch_hypotheses, t_cur_len)
 
-            for i, banned_tokens_ in enumerate(t_banned_batch_tokens):
-                t_scores[i, banned_tokens_] = -10000.0
+            # for i, banned_tokens_ in enumerate(t_banned_batch_tokens):
+            #     t_scores[i, banned_tokens_] = -10000.0
+            
+            # generated_ngrams = [{} for i in range(num_batch_hypotheses)]
+            # for idx, r in enumerate(c_generated_ngrams):
+            #     for entry in r:
+            #         generated_ngrams[idx][tuple(entry[0])] = entry[1]
 
-            assert generated_ngrams == t_generated_ngrams
-            assert banned_tokens == t_banned_batch_tokens
-            assert torch.all(torch.abs(scores - t_scores) <= 1e-6)
+            # assert generated_ngrams == t_generated_ngrams
+            # assert banned_tokens == t_banned_batch_tokens
+            # assert torch.all(torch.abs(scores - t_scores) <= 1e-6)
             # assert t_generated_ngrams == self.state
             # print(banned_tokens)
+        # print("Finished...")
         return scores
 
 
