@@ -405,8 +405,7 @@ class BeamSearchScorer(BeamScorer):
         
         batch_size = len(self._beam_hyps)
 
-        # if beam_indices is not None:
-        if False:
+        if beam_indices is not None:
             return self.finalize_cpu(
                 input_ids=input_ids,
                 final_beam_scores=final_beam_scores,
@@ -448,7 +447,6 @@ class BeamSearchScorer(BeamScorer):
             sent_lengths_max = int(sent_lengths.max().item()) + 1
             sent_max_len = min(sent_lengths_max, max_length) if max_length is not None else sent_lengths_max
             decoded: torch.LongTensor = torch.zeros(batch_size * self.num_beam_hyps_to_keep, sent_max_len, device="cpu", dtype=torch.long)
-            # TODO start work from here
             indices = None
 
             # shorter batches are padded if needed

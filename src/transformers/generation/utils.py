@@ -2836,7 +2836,7 @@ class GenerationMixin:
                     break
                 else:
                     this_peer_finished = True
-        if False:
+        if beam_indices is not None:
             beam_hypotheses = beam_hypotheses.cpu()
             beam_hypotheses_meta = beam_hypotheses_meta.cpu()
             for batch_idx, beam_hyp in enumerate(beam_scorer._beam_hyps):
