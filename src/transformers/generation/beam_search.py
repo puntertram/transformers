@@ -239,23 +239,22 @@ class BeamSearchScorer(BeamScorer):
         if isinstance(eos_token_id, int):
             eos_token_id = [eos_token_id]
 
-        next_tokens = next_tokens.to(self.device)
-        next_scores = next_scores.to(self.device)
-        next_indices = next_indices.to(self.device)
-
-        beam_hyps = []
-        for beam_hyp in self._beam_hyps:
-            hyps = beam_hyp.to_list()
-            for i in range(len(hyps)):
-                hyps[i] = (hyps[i][0], hyps[i][1])
-            beam_hyps.append(hyps)
-
         next_beam_scores = None
         next_beam_tokens = None
         next_beam_indices = None
 
         if beam_indices is None:
             device = self.device
+            next_tokens = next_tokens.to(self.device)
+            next_scores = next_scores.to(self.device)
+            next_indices = next_indices.to(self.device)
+
+            beam_hyps = []
+            for beam_hyp in self._beam_hyps:
+                hyps = beam_hyp.to_list()
+                for i in range(len(hyps)):
+                    hyps[i] = (hyps[i][0], hyps[i][1])
+                beam_hyps.append(hyps)
             next_beam_scores = torch.zeros((batch_size, self.group_size), dtype=next_scores.dtype, device=device)
             next_beam_tokens = torch.zeros((batch_size, self.group_size), dtype=next_tokens.dtype, device=device)
             next_beam_indices = torch.zeros((batch_size, self.group_size), dtype=next_indices.dtype, device=device)
@@ -384,7 +383,7 @@ class BeamSearchScorer(BeamScorer):
 
         if beam_indices is None:        
             assert pad_token_id is not None, "`pad_token_id` has to be defined"
-            sent_lengths = input_ids.new(batch_size * self.num_beam_hyps_to_keep)
+            sent_lengths = torch.zeros(batch_size * self.num_beam_hyps_to_keep, device=self.device, dtype=input_ids.dtype)
             best = [torch.zeros(1, device=self.device)] * (batch_size * self.num_beam_hyps_to_keep)
             best_indices = []
             best_scores = torch.zeros(batch_size * self.num_beam_hyps_to_keep, device=self.device, dtype=torch.float32)
@@ -396,7 +395,18 @@ class BeamSearchScorer(BeamScorer):
                 for i in range(len(hyps)):
                     hyps[i] = (hyps[i][0], hyps[i][1])
                 beam_hyps.append(hyps)
-            sent_max_len, best =  custom_beam_search_cpu.BeamSearchFinalize(
+            @measure_times
+            def beam_search_finalize_communication():
+                # Bring the tensors to the host
+                input_ids = input_ids.to("cpu")
+                # self._done = self._done.to("cpu")
+                # for i in range(len(best)):
+                #     best[i] = best[i].to("cpu")
+                final_beam_scores = final_beam_scores.to("cpu")
+                
+                
+
+            sent_max_len, best = custom_beam_search_cpu.BeamSearchFinalize(
                 beam_hyps,
                 best,
                 self._done,
@@ -412,10 +422,10 @@ class BeamSearchScorer(BeamScorer):
                 number_of_threads
             )
 
-            decoded: torch.LongTensor = input_ids.new(batch_size * self.num_beam_hyps_to_keep, sent_max_len)
+            decoded: torch.LongTensor = torch.zeros(batch_size * self.num_beam_hyps_to_keep, sent_max_len, device=self.device, dtype=input_ids.dtype)
 
             if len(best_indices) > 0 and best_indices[0] is not None:
-                indices: torch.LongTensor = input_ids.new(batch_size * self.num_beam_hyps_to_keep, sent_max_len)
+                indices: torch.LongTensor = torch.zeros(batch_size * self.num_beam_hyps_to_keep, sent_max_len, dtype=input_ids.dtype, device=self.device)
             else:
                 indices = None
 
