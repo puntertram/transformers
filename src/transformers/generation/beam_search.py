@@ -403,9 +403,8 @@ class BeamSearchScorer(BeamScorer):
                 # for i in range(len(best)):
                 #     best[i] = best[i].to("cpu")
                 final_beam_scores = final_beam_scores.to("cpu")
-                
-                
 
+            beam_search_finalize_communication()                   
             sent_max_len, best = custom_beam_search_cpu.BeamSearchFinalize(
                 beam_hyps,
                 best,
