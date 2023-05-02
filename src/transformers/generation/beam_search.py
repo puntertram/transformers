@@ -396,15 +396,16 @@ class BeamSearchScorer(BeamScorer):
                     hyps[i] = (hyps[i][0], hyps[i][1])
                 beam_hyps.append(hyps)
             @measure_times
-            def beam_search_finalize_communication():
+            def beam_search_finalize_communication(input_ids, final_beam_scores):
                 # Bring the tensors to the host
                 input_ids = input_ids.to("cpu")
                 # self._done = self._done.to("cpu")
                 # for i in range(len(best)):
                 #     best[i] = best[i].to("cpu")
                 final_beam_scores = final_beam_scores.to("cpu")
+                return input_ids, final_beam_scores
 
-            beam_search_finalize_communication()                   
+            input_ids, final_beam_scores = beam_search_finalize_communication(input_ids, final_beam_scores)                   
             sent_max_len, best = custom_beam_search_cpu.BeamSearchFinalize(
                 beam_hyps,
                 best,
