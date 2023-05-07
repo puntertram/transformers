@@ -46,6 +46,33 @@ from .stopping_criteria import (
     validate_stopping_criteria,
 )
 
+from .logits_process import (
+    EncoderNoRepeatNGramLogitsProcessor,
+    EncoderRepetitionPenaltyLogitsProcessor,
+    EpsilonLogitsWarper,
+    EtaLogitsWarper,
+    ExponentialDecayLengthPenalty,
+    ForcedBOSTokenLogitsProcessor,
+    ForcedEOSTokenLogitsProcessor,
+    ForceTokensLogitsProcessor,
+    HammingDiversityLogitsProcessor,
+    InfNanRemoveLogitsProcessor,
+    LogitNormalization,
+    LogitsProcessorList,
+    MinLengthLogitsProcessor,
+    MinNewTokensLengthLogitsProcessor,
+    NoBadWordsLogitsProcessor,
+    NoRepeatNGramLogitsProcessor,
+    PrefixConstrainedLogitsProcessor,
+    RepetitionPenaltyLogitsProcessor,
+    SuppressTokensAtBeginLogitsProcessor,
+    SuppressTokensLogitsProcessor,
+    TemperatureLogitsWarper,
+    TopKLogitsWarper,
+    TopPLogitsWarper,
+    TypicalLogitsWarper,
+)
+
 from workload_partitioner import WorkloadPartitioner, PARTITION_RESIDENT_DEVICES, PARTITION_TYPES
 from custom_time_profile_gpu import measure_times
 
@@ -570,17 +597,23 @@ class GenerationMixin:
 
     @measure_times
     def _prepare_encoder_decoder_kwargs_for_generation(
-        self, inputs_tensor: torch.Tensor, model_kwargs, model_input_name: Optional[str] = None
+        self, inputs_tensor: torch.Tensor, model_kwargs_gpu, model_kwargs_cpu, model_input_name: Optional[str] = None
     ) -> Dict[str, Any]:
         # 1. get encoder
-        encoder = self.get_encoder()
-        encoder_cpu = encoder.to("cpu")
+        encoder_gpu = self.get_encoder()
+        encoder_cpu = copy.deepcopy(encoder_gpu).to("cpu")
 
         # 2. prepare encoder args and encoder kwargs from model kwargs
         irrelevant_prefix = ["decoder_", "cross_attn", "use_cache"]
-        encoder_kwargs = {
+        encoder_kwargs_gpu = {
             argument: value
-            for argument, value in model_kwargs.items()
+            for argument, value in model_kwargs_gpu.items()
+            if not any(argument.startswith(p) for p in irrelevant_prefix)
+        }
+
+        encoder_kwargs_cpu = {
+            argument: value
+            for argument, value in model_kwargs_cpu.items()
             if not any(argument.startswith(p) for p in irrelevant_prefix)
         }
 
@@ -589,12 +622,16 @@ class GenerationMixin:
 
         # 3. make sure that encoder returns `ModelOutput`
         model_input_name = model_input_name if model_input_name is not None else self.main_input_name
-        encoder_kwargs["return_dict"] = True
-        encoder_kwargs[model_input_name] = inputs_tensor
-        model_kwargs["encoder_outputs"]: ModelOutput = encoder(**encoder_kwargs)
+        encoder_kwargs_gpu["return_dict"] = True
+        encoder_kwargs_gpu[model_input_name] = self.workload_partitioner.gpu_bundle.encoder_inputs_tensor
+        model_kwargs_gpu["encoder_outputs"]: ModelOutput = encoder_gpu(**encoder_kwargs_gpu)
+        
+        encoder_kwargs_cpu["return_dict"] = True
+        encoder_kwargs_cpu[model_input_name] = self.workload_partitioner.cpu_bundle.encoder_inputs_tensor
+        model_kwargs_cpu["encoder_outputs"]: ModelOutput = encoder_cpu(**encoder_kwargs_cpu)
         
 
-        return model_kwargs
+        return model_kwargs_gpu, model_kwargs_cpu
 
     def _prepare_decoder_input_ids_for_generation(
         self,
@@ -1226,7 +1263,7 @@ class GenerationMixin:
             )
 
         # Create the WorkloadPartitioner
-        self.workload_partitioner = WorkloadPartitioner()
+        self.workload_partitioner = self.get_workload_partitioner()
 
         # decoder-only models should use left-padding for generation
         if not self.config.is_encoder_decoder:
@@ -1242,8 +1279,12 @@ class GenerationMixin:
         if self.config.is_encoder_decoder and "encoder_outputs" not in model_kwargs:
             # if model is encoder decoder encoder_outputs are created
             # and added to `model_kwargs`
-            model_kwargs = self._prepare_encoder_decoder_kwargs_for_generation(
-                inputs_tensor, model_kwargs, model_input_name
+            # Here we make a copy of model_kwargs
+            model_kwargs_gpu = copy.deepcopy(model_kwargs)
+            model_kwargs_cpu = copy.deepcopy(model_kwargs)
+            
+            model_kwargs_gpu, model_kwargs_cpu = self._prepare_encoder_decoder_kwargs_for_generation(
+                inputs_tensor, model_kwargs_gpu, model_kwargs_cpu, model_input_name
             )
 
         # 5. Prepare `input_ids` which will be used for auto-regressive generation
@@ -1475,7 +1516,8 @@ class GenerationMixin:
                 output_scores=generation_config.output_scores,
                 return_dict_in_generate=generation_config.return_dict_in_generate,
                 synced_gpus=synced_gpus,
-                **model_kwargs,
+                model_kwargs_gpu=model_kwargs_gpu,
+                model_kwargs_cpu=model_kwargs_cpu
             )
 
         elif is_beam_sample_gen_mode:
@@ -2535,6 +2577,7 @@ class GenerationMixin:
     def beam_search(
         self,
         input_ids: torch.LongTensor,
+        stopping_criteria: Optional[StoppingCriteriaList] = None,
         max_length: Optional[int] = None,
         pad_token_id: Optional[int] = None,
         eos_token_id: Optional[Union[int, List[int]]] = None,
@@ -2546,25 +2589,47 @@ class GenerationMixin:
         **model_kwargs,
     ):
         if ((not return_dict_in_generate and not output_scores) or (not return_dict_in_generate)) and (not synced_gpus):
-            workload_partitioner.partition_workload(input_ids, PARTITION_TYPES.CPU_GPU)
+            self.workload_partitioner.partition_workload_pre_decoder(input_ids, PARTITION_TYPES.CPU_GPU)
             return self.beam_search_partitioned(
-                workload_partitioner.input_ids_gpu,
-                workload_partitioner.input_ids_cpu,
-                workload_partitioner.beam_scorer_gpu,
-                workload_partitioner.beam_scorer_cpu,
-                workload_partitioner.logits_processor_gpu,
-                workload_partitioner.logits_processor_cpu,
-                stopping_criteria
+                self.workload_partitioner.gpu_bundle.decoder_input_ids,
+                self.workload_partitioner.cpu_bundle.decoder_input_ids,
+                self.workload_partitioner.gpu_bundle.beam_scorer,
+                self.workload_partitioner.cpu_bundle.beam_scorer,
+                self.workload_partitioner.gpu_bundle.logits_processor,
+                self.workload_partitioner.cpu_bundle.logits_processor,
+                stopping_criteria,
+                max_length,
+                pad_token_id,
+                eos_token_id,
+                output_attentions,
+                output_hidden_states,
+                output_scores,
+                return_dict_in_generate,
+                **model_kwargs
             )
         elif (not return_dict_in_generate or not output_scores):
-            workload_partitioner.partition_workload(input_ids, PARTITION_TYPES.GPU)
-            return self.beam_search_non_partitioned()
+            self.workload_partitioner.partition_workload_pre_decoder(input_ids, PARTITION_TYPES.GPU)
+            return self.beam_search_non_partitioned(
+                self.workload_partitioner.gpu_bundle.decoder_input_ids,
+                self.workload_partitioner.gpu_bundle.beam_scorer,
+                self.workload_partitioner.gpu_bundle.logits_processor,
+                stopping_criteria,
+                max_length,
+                pad_token_id,
+                eos_token_id,
+                output_attentions,
+                output_hidden_states,
+                output_scores,
+                return_dict_in_generate,
+                synced_gpus,
+                **model_kwargs
+            )
         else:
-            workload_partitioner.partition_workload(input_ids, PARTITION_TYPES.BASELINE)
-            return self.beam_search_non_partitioned()
+            self.workload_partitioner.partition_workload_pre_decoder(input_ids, PARTITION_TYPES.BASELINE)
+            return self.beam_search_baseline()
 
     @measure_times
-    def beam_search_non_paritioned(
+    def beam_search_non_partitioned(
         self,
         input_ids: torch.LongTensor,
         beam_scorer: BeamScorer,
@@ -2889,7 +2954,6 @@ class GenerationMixin:
         output_hidden_states: Optional[bool] = None,
         output_scores: Optional[bool] = None,
         return_dict_in_generate: Optional[bool] = None,
-        synced_gpus: Optional[bool] = False,
         **model_kwargs,
     ) -> Union[BeamSearchOutput, torch.LongTensor]:
         r"""
@@ -2999,7 +3063,7 @@ class GenerationMixin:
         ['Wie alt bist du?']
         ```"""
 
-        model_cpu = self.to("cpu")
+        model_cpu = copy.deepcopy(self).to("cpu")
         # init values
         logits_processor_gpu = logits_processor_gpu if logits_processor_gpu is not None else LogitsProcessorList()
         logits_processor_cpu = logits_processor_cpu if logits_processor_cpu is not None else LogitsProcessorList()
@@ -3083,20 +3147,19 @@ class GenerationMixin:
         while True:
             if is_gpu:
                 next_tokens_gpu, next_indices_gpu = self.run_gpu(
-                    workload_partitioner.input_ids_gpu,
-                    workload_partitioner.beam_scorer_gpu,
+                    self.workload_partitioner.gpu_bundle.decoder_input_ids,
+                    self.workload_partitioner.gpu_bundle.beam_scorer,
                     batch_size_gpu,
                     num_beams,
-                    workload_partitioner.logits_processor_gpu,
+                    self.workload_partitioner.gpu_bundle.logits_processor,
                     stopping_criteria,
                     max_length,
                     pad_token_id,
                     eos_token_id,
-                    workload_partitioner.output_attentions_gpu,
-                    workload_partitioner.output_hidden_states_gpu,
-                    workload_partitioner.output_scores_gpu,
+                    output_attentions,
+                    output_hidden_states,
+                    output_scores,
                     return_dict_in_generate,
-                    synced_gpus,
                     cur_len_gpu,
                     **model_kwargs
                 )
@@ -3105,18 +3168,18 @@ class GenerationMixin:
             # Run a small part of the inference on the CPU so that the CPU is not underutilized
             if is_cpu:
                 next_tokens_cpu, next_indices_cpu = self.run_cpu(
-                    workload_partitioner.input_ids_cpu,
-                    workload_partitioner.beam_scorer_cpu,
+                    self.workload_partitioner.input_ids_cpu,
+                    self.workload_partitioner.beam_scorer_cpu,
                     batch_size_cpu,
                     num_beams,
-                    workload_partitioner.logits_processor_cpu,
+                    self.workload_partitioner.logits_processor_cpu,
                     stopping_criteria,
                     max_length,
                     pad_token_id,
                     eos_token_id,
-                    workload_partitioner.output_attentions_cpu,
-                    workload_partitioner.output_hidden_states_cpu,
-                    workload_partitioner.output_scores_cpu,
+                    output_attentions,
+                    output_hidden_states,
+                    output_scores,
                     return_dict_in_generate,
                     cur_len_cpu,
                     **model_kwargs
@@ -3124,10 +3187,7 @@ class GenerationMixin:
             done_gpu = False
             done_cpu = False 
             if beam_scorer_gpu.is_done or stopping_criteria(input_ids_gpu, scores):
-                if not synced_gpus:
-                    done_gpu = True
-                else:
-                    this_peer_finished = True
+                done_gpu = True
 
             if beam_scorer_cpu.is_done or stopping_criteria(input_ids_cpu, scores):
                 done_cpu = True
@@ -3135,7 +3195,7 @@ class GenerationMixin:
             if done_gpu and done_cpu:
                 if is_gpu:
                     sequence_outputs_gpu = beam_scorer_gpu.finalize(
-                        workload_partitioner.input_ids_gpu,
+                        self.workload_partitioner.gpu_bundle.decoder_input_ids,
                         beam_scores_gpu,
                         next_tokens_gpu,
                         next_indices_gpu,
@@ -3144,7 +3204,7 @@ class GenerationMixin:
                         max_length=stopping_criteria.max_length,
                         beam_indices=beam_indices,
                     )
-                    workload_partitioner.add_sequence_outputs(sequence_outputs_gpu, PARTITION_RESIDENT_DEVICES.GPU)
+                    self.workload_partitioner.add_sequence_outputs(sequence_outputs_gpu, PARTITION_RESIDENT_DEVICES.GPU)
                 if is_cpu:
                     sequence_outputs_cpu = beam_scorer_cpu.finalize(
                         input_ids_cpu,
@@ -3156,9 +3216,7 @@ class GenerationMixin:
                         max_length=stopping_criteria.max_length,
                         beam_indices=beam_indices,
                     )
-                    workload_partitioner.add_sequence_outputs(sequence_outputs_cpu, PARTITION_RESIDENT_DEVICES.CPU)
-                
-                workload_partitioner.join()
+                    self.workload_partitioner.add_sequence_outputs(sequence_outputs_cpu, PARTITION_RESIDENT_DEVICES.CPU)
                 is_cpu = False 
                 is_gpu = False
                 break 
@@ -3175,16 +3233,16 @@ class GenerationMixin:
                     beam_indices=beam_indices,
                 )
                 if is_cpu:
-                    workload_partitioner.add_sequence_outputs(sequence_outputs_gpu, PARTITION_RESIDENT_DEVICES.GPU)
+                    self.workload_partitioner.add_sequence_outputs(sequence_outputs_gpu, PARTITION_RESIDENT_DEVICES.GPU)
                     wp_kwargs = {
                         "from": PARTITION_RESIDENT_DEVICES.CPU,
                         "to": PARTITION_RESIDENT_DEVICES.GPU
                     }
-                    workload_partitioner.transfer_partition(**wp_kwargs)
+                    self.workload_partitioner.transfer_partition(**wp_kwargs)
                     is_cpu = False
                     is_gpu = True
                 else:
-                    workload_partitioner.add_sequence_outputs(sequence_outputs_gpu, PARTITION_RESIDENT_DEVICES.CPU_GPU)
+                    self.workload_partitioner.add_sequence_outputs(sequence_outputs_gpu, PARTITION_RESIDENT_DEVICES.CPU_GPU)
                     is_cpu = False
                     is_gpu = False 
                     break
@@ -3203,12 +3261,14 @@ class GenerationMixin:
                     max_length=stopping_criteria.max_length,
                     beam_indices=beam_indices,
                 )
-                workload_partitioner.add_sequence_outputs(sequence_outputs_cpu, PARTITION_RESIDENT_DEVICES.CPU)
-
+                self.workload_partitioner.add_sequence_outputs(sequence_outputs_cpu, PARTITION_RESIDENT_DEVICES.CPU)
+        
+        # Merge both cpu and gpu partitions to one single output object 
+        self.workload_partitioner.join()
         if return_dict_in_generate:
             raise NotImplementedError(f"return_dict_in_generate={return_dict_in_generate} is not supported in the paritioning model... use return_dict_generate=False instead")
         else:
-            return workload_partitioner.get_sequence_outputs()["sequences"]
+            return self.workload_partitioner.get_sequence_outputs()["sequences"]
     
     @measure_times
     def run_gpu(
@@ -3295,7 +3355,7 @@ class GenerationMixin:
         beam_idx = beam_outputs["next_beam_indices"]
 
         input_ids = torch.cat([input_ids[beam_idx, :], beam_next_tokens.unsqueeze(-1)], dim=-1)
-
+        self.workload_partitioner.gpu_bundle.add_decoder_input_ids(input_ids)
         model_kwargs = self._update_model_kwargs_for_generation(
             outputs, model_kwargs, is_encoder_decoder=self.config.is_encoder_decoder
         )
@@ -3393,7 +3453,8 @@ class GenerationMixin:
         beam_idx = beam_outputs["next_beam_indices"]
 
         input_ids = torch.cat([input_ids[beam_idx, :], beam_next_tokens.unsqueeze(-1)], dim=-1)
-
+        self.workload_partitioner.cpu_bundle.add_decoder_input_ids(input_ids)
+        
         model_kwargs = self._update_model_kwargs_for_generation(
             outputs, model_kwargs, is_encoder_decoder=self.config.is_encoder_decoder
         )
