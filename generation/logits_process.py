@@ -518,6 +518,88 @@ class NoRepeatNGramLogitsProcessor(LogitsProcessor):
         return scores
 
 
+class NoRepeatNGramLogitsProcessorCPU(LogitsProcessor):
+    r"""
+    [`LogitsProcessor`] that enforces no repetition of n-grams. See
+    [Fairseq](https://github.com/pytorch/fairseq/blob/a07cb6f40480928c9e0548b737aadd36ee66ac76/fairseq/sequence_generator.py#L345).
+    Args:
+        ngram_size (`int`):
+            All ngrams of size `ngram_size` can only occur once.
+    """
+
+    def __init__(self, ngram_size: int, number_of_threads):
+        if not isinstance(ngram_size, int) or ngram_size <= 0:
+            raise ValueError(f"`ngram_size` has to be a strictly positive integer, but is {ngram_size}")
+        self.ngram_size = ngram_size
+        self.number_of_threads = number_of_threads
+
+    @measure_times
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
+        import custom_beam_search_cpu
+        cur_len = input_ids.shape[1]
+        if cur_len >= self.ngram_size:
+            self.cur_idx = cur_len - self.ngram_size
+            # t_scores = scores.clone()
+            
+            num_batch_hypotheses = scores.shape[0]
+            c_generated_ngrams, banned_tokens = custom_beam_search_cpu.NoRepeatNGramLogitsProcessor(int(self.ngram_size), input_ids, scores, int(scores.shape[0]), self.number_of_threads)
+            
+            
+            # t_num_batch_hypotheses = t_scores.shape[0]
+            # t_cur_len = input_ids.shape[-1]
+            # t_banned_batch_tokens, t_generated_ngrams = _calc_banned_ngram_tokens(self.ngram_size, input_ids, t_num_batch_hypotheses, t_cur_len)
+
+            # for i, banned_tokens_ in enumerate(t_banned_batch_tokens):
+            #     t_scores[i, banned_tokens_] = -10000.0
+            
+            # generated_ngrams = [{} for i in range(num_batch_hypotheses)]
+            # for idx, r in enumerate(c_generated_ngrams):
+            #     for entry in r:
+            #         generated_ngrams[idx][tuple(entry[0])] = entry[1]
+
+            # assert generated_ngrams == t_generated_ngrams
+            # assert banned_tokens == t_banned_batch_tokens
+            # assert torch.all(torch.abs(scores - t_scores) <= 1e-6)
+            # assert t_generated_ngrams == self.state
+            # print(banned_tokens)
+        # print("Finished...")
+        return scores
+
+
+
+class NoRepeatNGramLogitsProcessorGPU(LogitsProcessor):
+    r"""
+    [`LogitsProcessor`] that enforces no repetition of n-grams. See
+    [Fairseq](https://github.com/pytorch/fairseq/blob/a07cb6f40480928c9e0548b737aadd36ee66ac76/fairseq/sequence_generator.py#L345).
+    Args:
+        ngram_size (`int`):
+            All ngrams of size `ngram_size` can only occur once.
+    """
+
+    def __init__(self, ngram_size: int):
+        if not isinstance(ngram_size, int) or ngram_size <= 0:
+            raise ValueError(
+                f"`ngram_size` has to be a strictly positive integer, but is {ngram_size}")
+        self.ngram_size = ngram_size
+
+    @measure_times
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
+        num_batch_hypotheses = scores.shape[0]
+        cur_len = input_ids.shape[-1]
+        # banned_batch_tokens = _calc_banned_ngram_tokens(self.ngram_size, input_ids, num_batch_hypotheses, cur_len)
+        # temp_scores = scores.clone()
+        # for i, banned_tokens in enumerate(banned_batch_tokens):
+        #     temp_scores[i, banned_tokens] = -10000.0
+        if not (cur_len < self.ngram_size):
+            import custom_beam_search_cuda
+            custom_beam_search_cuda._get_ngrams(self.ngram_size, input_ids.type(torch.float32), scores, num_batch_hypotheses)
+        # assert (scores == temp_scores).all()
+        return scores
+
+
+
+
+
 class EncoderNoRepeatNGramLogitsProcessor(LogitsProcessor):
     r"""
     [`LogitsProcessor`] that enforces no repetition of encoder input ids n-grams for the decoder ids. See
