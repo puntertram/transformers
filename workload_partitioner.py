@@ -300,11 +300,11 @@ class WorkloadPartitioner:
                 
 
     @measure_times
-    def partition_workload_pre_encoder(self, inputs_tensor: torch.LongTensor, attention_mask: torch.tensor, partition_type: PARTITION_TYPES, split_ratio: int):
+    def partition_workload_pre_encoder(self, inputs_tensor: torch.LongTensor, attention_mask: torch.tensor, partition_type: PARTITION_TYPES, cpu_size: int):
         assert partition_type in [PARTITION_TYPES.GPU, PARTITION_TYPES.CPU_GPU, PARTITION_TYPES.BASELINE], f"Only CPU_GPU, GPU and BASELINE partition types supported, but found {partition_type}"
         if partition_type == PARTITION_TYPES.CPU_GPU:
             indices = [i for i in range(inputs_tensor.shape[0])]
-            cpu_indices = random.sample(indices, k=int(split_ratio*inputs_tensor.shape[0]))
+            cpu_indices = random.sample(indices, k=cpu_size)
             gpu_indices = list(filter(lambda x: x not in cpu_indices, indices))
             self.mapping_function = {"cpu": cpu_indices, "gpu": gpu_indices}
             inputs_tensor_cpu = inputs_tensor[cpu_indices].to("cpu")

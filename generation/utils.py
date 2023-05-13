@@ -618,7 +618,7 @@ class GenerationMixin:
         }
 
         # Make sure to partition the model across the CPU and the GPU for the encoder
-        self.workload_partitioner.partition_workload_pre_encoder(inputs_tensor, model_kwargs_gpu["attention_mask"], PARTITION_TYPES.CPU_GPU, 0.17)
+        self.workload_partitioner.partition_workload_pre_encoder(inputs_tensor, model_kwargs_gpu["attention_mask"], PARTITION_TYPES.CPU_GPU, 2)
 
         # 3. make sure that encoder returns `ModelOutput`
         model_input_name = model_input_name if model_input_name is not None else self.main_input_name
@@ -3327,6 +3327,8 @@ class GenerationMixin:
                     eos_token_id=eos_token_id,
                     max_length=stopping_criteria.max_length,
                     beam_indices=beam_indices,
+                    beam_hypotheses=beam_hypotheses_gpu,
+                    beam_hypotheses_meta=beam_hypotheses_meta_gpu
                 )
                 if is_cpu:
                     self.workload_partitioner.add_sequence_outputs(sequence_outputs_gpu, PARTITION_RESIDENT_DEVICES.GPU)
