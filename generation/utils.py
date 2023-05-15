@@ -618,7 +618,7 @@ class GenerationMixin:
         }
 
         # Make sure to partition the model across the CPU and the GPU for the encoder
-        self.workload_partitioner.partition_workload_pre_encoder(inputs_tensor, model_kwargs_gpu["attention_mask"], PARTITION_TYPES.CPU_GPU, 2)
+        self.workload_partitioner.partition_workload_pre_encoder(inputs_tensor, model_kwargs_gpu["attention_mask"], PARTITION_TYPES.CPU_GPU, 1)
 
         # 3. make sure that encoder returns `ModelOutput`
         model_input_name = model_input_name if model_input_name is not None else self.main_input_name
@@ -1559,7 +1559,7 @@ class GenerationMixin:
             )
             
 
-            self.workload_partitioner.partition_workload_pre_decoder(input_ids, PARTITION_TYPES.CPU_GPU, 0.1)
+            self.workload_partitioner.partition_workload_pre_decoder(input_ids, PARTITION_TYPES.CPU_GPU, 1)
 
             # 12. interleave input_ids with `num_beams` additional sequences per batch
             input_ids_gpu, model_kwargs_gpu = self._expand_inputs_for_generation(
@@ -3394,6 +3394,8 @@ class GenerationMixin:
     ):
         model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
 
+        torch.save(model_inputs["decoder_input_ids"], "/home/puneeth_athena/MtechProject/D_input_scratch.pt")
+        print(f"gpu indices -> {self.workload_partitioner.mapping_function['gpu']}")
         outputs = self(
             **model_inputs,
             return_dict=True,
@@ -3402,6 +3404,7 @@ class GenerationMixin:
         )
 
         next_token_logits = outputs.logits[:, -1, :]
+        torch.save(next_token_logits, "/home/puneeth_athena/MtechProject/logits_scratch.pt")
         # hack: adjust tokens for Marian. For Marian we have to make sure that the `pad_token_id`
         # cannot be generated both before and after the `nn.functional.log_softmax` operation.
         next_token_logits = self.adjust_logits_during_generation(next_token_logits, cur_len=cur_len)
@@ -3410,7 +3413,8 @@ class GenerationMixin:
         )  # (batch_size * num_beams, vocab_size)
 
         next_token_scores_processed = logits_processor(input_ids, next_token_scores)
-        next_token_scores = next_token_scores_processed + beam_scores[:, None].expand_as(next_token_scores)
+        # next_token_scores = next_token_scores_processed + beam_scores[:, None].expand_as(next_token_scores)
+        next_token_scores = next_token_scores + beam_scores[:, None].expand_as(next_token_scores)
 
         # Store scores, attentions and hidden_states when required
         if return_dict_in_generate:

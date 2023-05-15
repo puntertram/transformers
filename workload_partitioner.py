@@ -285,13 +285,15 @@ class WorkloadPartitioner:
         # Construct sequences
         sequences = torch.zeros(self.cpu_bundle.batch_size + self.gpu_bundle.batch_size, max(self.cpu_bundle.sequence_outputs["sequences"].shape[1], self.gpu_bundle.sequence_outputs["sequences"].shape[1]), dtype=self.cpu_bundle.sequence_outputs["sequences"].dtype)
         sequence_scores = torch.zeros(self.cpu_bundle.batch_size + self.gpu_bundle.batch_size)
-        self.gpu_bundle.sequence_outputs["sequences"] = self.gpu_bundle.sequence_outputs["sequences"].to("cpu")
+        # self.gpu_bundle.sequence_outputs["sequences"] = self.gpu_bundle.sequence_outputs["sequences"].to("cpu")
         for idx, gpu_idx in enumerate(self.mapping_function["gpu"]):
             sequences[gpu_idx, :self.gpu_bundle.sequence_outputs["sequences"].shape[1]] = self.gpu_bundle.sequence_outputs["sequences"][idx]
+            sequence_scores[gpu_idx] = self.gpu_bundle.sequence_outputs["sequence_scores"][idx]
         for idx, cpu_idx in enumerate(self.mapping_function["cpu"]):
             sequences[cpu_idx, :self.cpu_bundle.sequence_outputs["sequences"].shape[1]] = self.cpu_bundle.sequence_outputs["sequences"][idx]
-        sequence_scores[self.mapping_function["gpu"]] = self.gpu_bundle.sequence_outputs["sequence_scores"].to("cpu")
-        sequence_scores[self.mapping_function["cpu"]] = self.cpu_bundle.sequence_outputs["sequence_scores"]
+            sequence_scores[cpu_idx] = self.cpu_bundle.sequence_outputs["sequence_scores"][idx]
+        # sequence_scores[self.mapping_function["gpu"]] = self.gpu_bundle.sequence_outputs["sequence_scores"].to("cpu")
+        # sequence_scores[self.mapping_function["cpu"]] = self.cpu_bundle.sequence_outputs["sequence_scores"]
         
         self.sequence_outputs = {
             "sequences": sequences,
@@ -322,11 +324,13 @@ class WorkloadPartitioner:
         elif partition_type == PARTITION_TYPES.GPU:
             self.gpu_bundle.encoder_inputs_tensor = inputs_tensor
             self.gpu_bundle.encoder_attention_mask = attention_mask
+            self.gpu_bundle.batch_size = inputs_tensor.shape[0]
         elif partition_type == PARTITION_TYPES.BASELINE:
             self.bundle.encoder_inputs_tensor = inputs_tensor
             self.bundle.encoder_attention_mask = attention_mask
+            self.bundle.batch_size = inputs_tensor.shape[0]
     @measure_times
-    def partition_workload_pre_decoder(self, input_ids: torch.LongTensor, partition_type: PARTITION_TYPES, split_ratio: int):
+    def partition_workload_pre_decoder(self, input_ids: torch.LongTensor, partition_type: PARTITION_TYPES, cpu_size: int):
         assert partition_type in [PARTITION_TYPES.GPU, PARTITION_TYPES.CPU_GPU, PARTITION_TYPES.BASELINE], f"Only CPU_GPU, GPU and BASELINE partition types supported, but found {partition_type}"
         if partition_type == PARTITION_TYPES.CPU_GPU:
             input_ids_cpu = input_ids[self.mapping_function["cpu"]].to("cpu")

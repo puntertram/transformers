@@ -1067,6 +1067,8 @@ class MBartDecoder(MBartPreTrainedModel):
 
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
+        torch.save(hidden_states, "/home/puneeth_athena/MtechProject/hidden_states_scratch.pt")
+
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
@@ -1254,6 +1256,7 @@ class MBartModel(MBartPreTrainedModel):
                 hidden_states=encoder_outputs[1] if len(encoder_outputs) > 1 else None,
                 attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
             )
+        torch.save(attention_mask, "/home/puneeth_athena/MtechProject/attention_mask_scratch.pt")
 
         # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)
         decoder_outputs = self.decoder(
@@ -1325,7 +1328,6 @@ class MBartForConditionalGeneration(MBartPreTrainedModel):
         self.model = MBartModel(config)
         self.register_buffer("final_logits_bias", torch.zeros((1, self.model.shared.num_embeddings)))
         self.lm_head = nn.Linear(config.d_model, self.model.shared.num_embeddings, bias=False)
-        self.workload_partitioner = MBartWorkloadPartitioner(PARTITION_TYPES.CPU_GPU)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1358,6 +1360,7 @@ class MBartForConditionalGeneration(MBartPreTrainedModel):
         return self.lm_head
 
     def get_workload_partitioner(self):
+        self.workload_partitioner = MBartWorkloadPartitioner(PARTITION_TYPES.CPU_GPU)
         return self.workload_partitioner
 
     @measure_times
@@ -1422,6 +1425,8 @@ class MBartForConditionalGeneration(MBartPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+        torch.save(outputs, "/home/puneeth_athena/MtechProject/mbartModelOutScratch.pt")
+
         lm_logits = self.lm_head(outputs[0]) + self.final_logits_bias
 
         masked_lm_loss = None
