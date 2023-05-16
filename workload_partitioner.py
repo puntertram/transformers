@@ -280,6 +280,7 @@ class WorkloadPartitioner:
         assert self.joined, f"Did not join both the cpu and gpu versions, self.joined must be True, but found False instead..."
         return self.sequence_outputs
     
+    @measure_times
     def join(self):
         self.joined = True
         # Construct sequences
@@ -333,14 +334,22 @@ class WorkloadPartitioner:
     def partition_workload_pre_decoder(self, input_ids: torch.LongTensor, partition_type: PARTITION_TYPES, cpu_size: int):
         assert partition_type in [PARTITION_TYPES.GPU, PARTITION_TYPES.CPU_GPU, PARTITION_TYPES.BASELINE], f"Only CPU_GPU, GPU and BASELINE partition types supported, but found {partition_type}"
         if partition_type == PARTITION_TYPES.CPU_GPU:
+            indices = [i for i in range(input_ids.shape[0])]
+            cpu_indices = random.sample(indices, k=cpu_size)
+            gpu_indices = list(filter(lambda x: x not in cpu_indices, indices))
+            self.mapping_function = {"cpu": cpu_indices, "gpu": gpu_indices}
             input_ids_cpu = input_ids[self.mapping_function["cpu"]].to("cpu")
             input_ids_gpu = input_ids[self.mapping_function["gpu"]]
             self.gpu_bundle.add_decoder_input_ids(input_ids_gpu)
             self.cpu_bundle.add_decoder_input_ids(input_ids_cpu)
+            self.gpu_bundle.batch_size = input_ids_gpu.shape[0]
+            self.cpu_bundle.batch_size = input_ids_cpu.shape[0]
         elif partition_type == PARTITION_TYPES.GPU:
-            self.gpu_bundle.add_decoder_input_ids(input_ids)
+            self.gpu_bundle.add_decoder_input_ids(input_ids_gpu)
+            self.gpu_bundle.batch_size = input_ids_gpu.shape[0]
         elif partition_type == PARTITION_TYPES.BASELINE:
             self.bundle.add_decoder_input_ids(input_ids)
+            self.bundle.batch_size = input_ids.shape[0]
         
 
     def transfer_partition(self, **kwargs):

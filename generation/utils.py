@@ -1560,7 +1560,7 @@ class GenerationMixin:
                 max_length=generation_config.max_length,
             )
             
-
+            self.join()
             self.workload_partitioner.partition_workload_pre_decoder(input_ids, PARTITION_TYPES.CPU_GPU, 1)
 
             # 12. interleave input_ids with `num_beams` additional sequences per batch
