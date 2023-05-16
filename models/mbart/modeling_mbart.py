@@ -1067,7 +1067,7 @@ class MBartDecoder(MBartPreTrainedModel):
 
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
-        torch.save(hidden_states, "/home/puneeth_athena/MtechProject/hidden_states_scratch.pt")
+        # torch.save(hidden_states, "/home/puneeth_athena/MtechProject/hidden_states_scratch.pt")
 
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
@@ -1256,7 +1256,7 @@ class MBartModel(MBartPreTrainedModel):
                 hidden_states=encoder_outputs[1] if len(encoder_outputs) > 1 else None,
                 attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
             )
-        torch.save(attention_mask, "/home/puneeth_athena/MtechProject/attention_mask_scratch.pt")
+        # torch.save(attention_mask, "/home/puneeth_athena/MtechProject/attention_mask_scratch.pt")
 
         # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)
         decoder_outputs = self.decoder(
@@ -1333,12 +1333,42 @@ class MBartForConditionalGeneration(MBartPreTrainedModel):
         self.post_init()
 
     @measure_times
+    def partition(self, partition_type: PARTITION_TYPES, custom_transfer_function):
+        self.partition_type = partition_type
+        if self.partition_type == PARTITION_TYPES.CPU_GPU:
+            # self.model_gpu = copy.deepcopy(self.model)
+            # custom_transfer_function(self.model_gpu)
+            model_cpu = copy.deepcopy(self)
+            custom_transfer_function(self)
+            self.model_cpu = model_cpu.to("cpu")
+           
+            
+
+    @measure_times
     def get_encoder(self):
         return self.model.get_encoder()
 
     @measure_times
+    def get_encoder_cpu(self):
+        return self.model_cpu.get_encoder()
+
+    @measure_times
+    def get_encoder_gpu(self):
+        return self.model.get_encoder()
+
+
+    @measure_times
     def get_decoder(self):
         return self.model.get_decoder()
+
+    @measure_times
+    def get_decoder_cpu(self):
+        return self.model_cpu.get_decoder()
+
+    @measure_times
+    def get_decoder_gpu(self):
+        return self.model.get_decoder()
+
 
     @measure_times
     def resize_token_embeddings(self, new_num_tokens: int) -> nn.Embedding:
@@ -1425,7 +1455,7 @@ class MBartForConditionalGeneration(MBartPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-        torch.save(outputs, "/home/puneeth_athena/MtechProject/mbartModelOutScratch.pt")
+        # torch.save(outputs, "/home/puneeth_athena/MtechProject/mbartModelOutScratch.pt")
 
         lm_logits = self.lm_head(outputs[0]) + self.final_logits_bias
 

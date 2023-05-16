@@ -600,8 +600,9 @@ class GenerationMixin:
         self, inputs_tensor: torch.Tensor, model_kwargs_gpu, model_kwargs_cpu, model_input_name: Optional[str] = None
     ) -> Dict[str, Any]:
         # 1. get encoder
-        encoder_gpu = self.get_encoder()
-        encoder_cpu = copy.deepcopy(encoder_gpu).to("cpu")
+        encoder_gpu = self.get_encoder_gpu()
+        encoder_cpu = self.get_encoder_cpu()
+        # encoder_cpu = copy.deepcopy(encoder_gpu).to("cpu")
 
         # 2. prepare encoder args and encoder kwargs from model kwargs
         irrelevant_prefix = ["decoder_", "cross_attn", "use_cache"]
@@ -618,7 +619,7 @@ class GenerationMixin:
         }
 
         # Make sure to partition the model across the CPU and the GPU for the encoder
-        self.workload_partitioner.partition_workload_pre_encoder(inputs_tensor, model_kwargs_gpu["attention_mask"], PARTITION_TYPES.CPU_GPU, 1)
+        self.workload_partitioner.partition_workload_pre_encoder(inputs_tensor, model_kwargs_gpu["attention_mask"], PARTITION_TYPES.CPU_GPU, 3)
 
         # 3. make sure that encoder returns `ModelOutput`
         model_input_name = model_input_name if model_input_name is not None else self.main_input_name
@@ -1111,6 +1112,7 @@ class GenerationMixin:
         # `prepare_inputs_for_generation` doesn't accept them, then a stricter check can be made ;)
         if "kwargs" in model_args or "model_kwargs" in model_args:
             model_args |= set(inspect.signature(self.forward).parameters)
+        model_args.add("number_of_threads")
         for key, value in model_kwargs.items():
             if value is not None and key not in model_args:
                 unused_model_args.append(key)
@@ -3145,7 +3147,7 @@ class GenerationMixin:
         ['Wie alt bist du?']
         ```"""
 
-        self.model_cpu = copy.deepcopy(self).to("cpu")
+        # self.model_cpu = copy.deepcopy(self).to("cpu")
         # init values
         logits_processor_gpu = logits_processor_gpu if logits_processor_gpu is not None else LogitsProcessorList()
         logits_processor_cpu = logits_processor_cpu if logits_processor_cpu is not None else LogitsProcessorList()
@@ -3234,7 +3236,7 @@ class GenerationMixin:
         is_cpu = True
         while True:
             if is_gpu:
-                next_tokens_gpu, next_indices_gpu, cur_len_gpu = self.run_gpu(
+                next_tokens_gpu, next_indices_gpu, cur_len_gpu, beam_scores_gpu = self.run_gpu(
                     self.workload_partitioner.gpu_bundle.decoder_input_ids,
                     self.workload_partitioner.gpu_bundle.beam_scorer,
                     batch_size_gpu,
@@ -3259,7 +3261,7 @@ class GenerationMixin:
 
             # Run a small part of the inference on the CPU so that the CPU is not underutilized
             if is_cpu:
-                next_tokens_cpu, next_indices_cpu, cur_len_cpu = self.run_cpu(
+                next_tokens_cpu, next_indices_cpu, cur_len_cpu, beam_scores_cpu = self.run_cpu(
                     input_ids=self.workload_partitioner.cpu_bundle.decoder_input_ids,
                     beam_scorer=self.workload_partitioner.cpu_bundle.beam_scorer,
                     batch_size=batch_size_cpu,
@@ -3311,6 +3313,7 @@ class GenerationMixin:
                         eos_token_id=eos_token_id,
                         max_length=stopping_criteria.max_length,
                         beam_indices=beam_indices,
+                        number_of_threads=model_kwargs_cpu["number_of_threads"]
                     )
                     self.workload_partitioner.add_sequence_outputs(sequence_outputs_cpu, PARTITION_RESIDENT_DEVICES.CPU)
                 is_cpu = False 
@@ -3394,8 +3397,8 @@ class GenerationMixin:
     ):
         model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
 
-        torch.save(model_inputs["decoder_input_ids"], "/home/puneeth_athena/MtechProject/D_input_scratch.pt")
-        print(f"gpu indices -> {self.workload_partitioner.mapping_function['gpu']}")
+        # torch.save(model_inputs["decoder_input_ids"], "/home/puneeth_athena/MtechProject/D_input_scratch.pt")
+        # print(f"gpu indices -> {self.workload_partitioner.mapping_function['gpu']}")
         outputs = self(
             **model_inputs,
             return_dict=True,
@@ -3404,7 +3407,7 @@ class GenerationMixin:
         )
 
         next_token_logits = outputs.logits[:, -1, :]
-        torch.save(next_token_logits, "/home/puneeth_athena/MtechProject/logits_scratch.pt")
+        # torch.save(next_token_logits, "/home/puneeth_athena/MtechProject/logits_scratch.pt")
         # hack: adjust tokens for Marian. For Marian we have to make sure that the `pad_token_id`
         # cannot be generated both before and after the `nn.functional.log_softmax` operation.
         next_token_logits = self.adjust_logits_during_generation(next_token_logits, cur_len=cur_len)
@@ -3475,7 +3478,7 @@ class GenerationMixin:
 
         if return_dict_in_generate and output_scores:
             beam_indices = tuple((beam_indices[beam_idx[i]] + (beam_idx[i],) for i in range(len(beam_indices))))
-        return beam_next_tokens, beam_idx, cur_len
+        return beam_next_tokens, beam_idx, cur_len, beam_scores
         
     
     
@@ -3579,7 +3582,7 @@ class GenerationMixin:
 
         if return_dict_in_generate and output_scores:
             beam_indices = tuple((beam_indices[beam_idx[i]] + (beam_idx[i],) for i in range(len(beam_indices))))
-        return beam_next_tokens, beam_idx, cur_len
+        return beam_next_tokens, beam_idx, cur_len, beam_scores
 
     @measure_times
     def beam_sample(
