@@ -280,6 +280,7 @@ class WorkloadPartitioner:
         assert self.joined, f"Did not join both the cpu and gpu versions, self.joined must be True, but found False instead..."
         return self.sequence_outputs
     
+    @measure_times
     def join(self):
         self.joined = True
         # Construct sequences
