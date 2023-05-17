@@ -274,8 +274,6 @@ class WorkloadPartitioner:
         assert partition_type in [PARTITION_TYPES.GPU, PARTITION_TYPES.CPU_GPU, PARTITION_TYPES.BASELINE], f"Only CPU_GPU, GPU and BASELINE partition types supported, but found {partition_type}"
         
 
-
-
     def get_sequence_outputs(self):
         assert self.joined, f"Did not join both the cpu and gpu versions, self.joined must be True, but found False instead..."
         return self.sequence_outputs
@@ -300,7 +298,6 @@ class WorkloadPartitioner:
             "sequences": sequences,
             "sequence_scores": sequence_scores
         }
-                
 
     @measure_times
     def partition_workload_pre_encoder(self, inputs_tensor: torch.LongTensor, attention_mask: torch.tensor, partition_type: PARTITION_TYPES, cpu_size: int):
@@ -330,28 +327,60 @@ class WorkloadPartitioner:
             self.bundle.encoder_inputs_tensor = inputs_tensor
             self.bundle.encoder_attention_mask = attention_mask
             self.bundle.batch_size = inputs_tensor.shape[0]
-    @measure_times
-    def partition_workload_pre_decoder(self, input_ids: torch.LongTensor, partition_type: PARTITION_TYPES, cpu_size: int):
-        assert partition_type in [PARTITION_TYPES.GPU, PARTITION_TYPES.CPU_GPU, PARTITION_TYPES.BASELINE], f"Only CPU_GPU, GPU and BASELINE partition types supported, but found {partition_type}"
-        if partition_type == PARTITION_TYPES.CPU_GPU:
-            indices = [i for i in range(input_ids.shape[0])]
-            cpu_indices = random.sample(indices, k=cpu_size)
-            gpu_indices = list(filter(lambda x: x not in cpu_indices, indices))
-            self.mapping_function = {"cpu": cpu_indices, "gpu": gpu_indices}
-            input_ids_cpu = input_ids[self.mapping_function["cpu"]].to("cpu")
-            input_ids_gpu = input_ids[self.mapping_function["gpu"]]
-            self.gpu_bundle.add_decoder_input_ids(input_ids_gpu)
-            self.cpu_bundle.add_decoder_input_ids(input_ids_cpu)
-            self.gpu_bundle.batch_size = input_ids_gpu.shape[0]
-            self.cpu_bundle.batch_size = input_ids_cpu.shape[0]
-        elif partition_type == PARTITION_TYPES.GPU:
-            self.gpu_bundle.add_decoder_input_ids(input_ids_gpu)
-            self.gpu_bundle.batch_size = input_ids_gpu.shape[0]
-        elif partition_type == PARTITION_TYPES.BASELINE:
-            self.bundle.add_decoder_input_ids(input_ids)
-            self.bundle.batch_size = input_ids.shape[0]
-        
 
+    @measure_times
+    def partition_workload_pre_decoder(self, input_ids: torch.LongTensor, partition_type: PARTITION_TYPES, cpu_size: int, cur_len: int):
+        assert partition_type in [PARTITION_TYPES.GPU, PARTITION_TYPES.CPU_GPU, PARTITION_TYPES.BASELINE], f"Only CPU_GPU, GPU and BASELINE partition types supported, but found {partition_type}"
+        if cur_len == 1:
+            if partition_type == PARTITION_TYPES.CPU_GPU:
+                t_indices = [i for i in range(self.gpu_bundle.batch_size + self.cpu_bundle.batch_size)]
+                n_indices = [i for i in range(input_ids.shape[0])]
+                t_cpu_indices = random.sample(indices, k=cpu_size)
+                t_gpu_indices = list(filter(lambda x: x not in t_cpu_indices, t_indices))
+                t_cpu_indices_len = len(t_cpu_indices)
+                n_cpu_indices = []
+                num_beams = input_ids.shape[0] // (self.gpu_bundle.batch_size + self.cpu_bundle.batch_size)
+                for i in range(t_cpu_indices_len):
+                    n_cpu_indices.extend([t_cpu_indices[i] * num_beams + ind for ind in range(num_beams)])
+                n_gpu_indices = list(filter(lambda x: x not in n_cpu_indices, n_indices))
+                
+                self.mapping_function = {"cpu": cpu_indices, "gpu": gpu_indices}
+                input_ids_cpu = input_ids[self.mapping_function["cpu"]].to("cpu")
+                input_ids_gpu = input_ids[self.mapping_function["gpu"]]
+                self.gpu_bundle.add_decoder_input_ids(input_ids_gpu)
+                self.cpu_bundle.add_decoder_input_ids(input_ids_cpu)
+                self.gpu_bundle.batch_size = input_ids_gpu.shape[0]
+                self.cpu_bundle.batch_size = input_ids_cpu.shape[0]
+            elif partition_type == PARTITION_TYPES.GPU:
+                self.gpu_bundle.add_decoder_input_ids(input_ids_gpu)
+                self.gpu_bundle.batch_size = input_ids_gpu.shape[0]
+            elif partition_type == PARTITION_TYPES.BASELINE:
+                self.bundle.add_decoder_input_ids(input_ids)
+                self.bundle.batch_size = input_ids.shape[0]
+        elif cur_len == 2:
+            if partition_type == PARTITION_TYPES.CPU_GPU:
+                indices = [i for i in range(input_ids.shape[0])]
+                cpu_indices = random.sample(indices, k=cpu_size)
+                gpu_indices = list(filter(lambda x: x not in cpu_indices, indices))
+                self.mapping_function = {"cpu": cpu_indices, "gpu": gpu_indices}
+                input_ids_cpu = input_ids[self.mapping_function["cpu"]].to("cpu")
+                input_ids_gpu = input_ids[self.mapping_function["gpu"]]
+                self.gpu_bundle.add_decoder_input_ids(input_ids_gpu)
+                self.cpu_bundle.add_decoder_input_ids(input_ids_cpu)
+                self.gpu_bundle.batch_size = input_ids_gpu.shape[0]
+                self.cpu_bundle.batch_size = input_ids_cpu.shape[0]
+            elif partition_type == PARTITION_TYPES.GPU:
+                self.gpu_bundle.add_decoder_input_ids(input_ids_gpu)
+                self.gpu_bundle.batch_size = input_ids_gpu.shape[0]
+            elif partition_type == PARTITION_TYPES.BASELINE:
+                self.bundle.add_decoder_input_ids(input_ids)
+                self.bundle.batch_size = input_ids.shape[0]
+        else:
+            # Nothing to do
+            pass 
+    
+        
+    @measure_times
     def transfer_partition(self, **kwargs):
         assert kwargs is not None, f"{kwargs} passed to transfer partition method should not be None"
         assert kwargs["from"] == PARTITION_RESIDENT_DEVICES.CPU, f"Dont know how to handle transfer from \

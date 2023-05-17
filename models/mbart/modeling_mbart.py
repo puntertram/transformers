@@ -1332,6 +1332,7 @@ class MBartForConditionalGeneration(MBartPreTrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
+
     @measure_times
     def partition(self, partition_type: PARTITION_TYPES, custom_transfer_function):
         self.partition_type = partition_type
@@ -1342,8 +1343,6 @@ class MBartForConditionalGeneration(MBartPreTrainedModel):
             custom_transfer_function(self)
             self.model_cpu = model_cpu.to("cpu")
            
-            
-
     @measure_times
     def get_encoder(self):
         return self.model.get_encoder()
