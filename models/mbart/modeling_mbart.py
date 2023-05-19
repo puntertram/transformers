@@ -231,7 +231,7 @@ class MBartAttention(nn.Module):
             # all previous decoder key/value_states. Further calls to uni-directional self-attention
             # can concat previous decoder key/value_states to current projected key/value_states (third "elif" case)
             # if encoder bi-directional self-attention `past_key_value` is always `None`
-            past_key_value = (key_states, value_states)
+            past_key_value = [key_states, value_states]
 
         proj_shape = (bsz * self.num_heads, -1, self.head_dim)
         query_states = self._shape(query_states, tgt_len, bsz).view(*proj_shape)
@@ -475,13 +475,13 @@ class MBartDecoderLayer(nn.Module):
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states
 
-        outputs = (hidden_states,)
+        outputs = [hidden_states,]
 
         if output_attentions:
             outputs += (self_attn_weights, cross_attn_weights)
 
         if use_cache:
-            outputs += (present_key_value,)
+            outputs += [present_key_value,]
 
         return outputs
 
@@ -1073,7 +1073,7 @@ class MBartDecoder(MBartPreTrainedModel):
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
         all_cross_attentions = () if (output_attentions and encoder_hidden_states is not None) else None
-        next_decoder_cache = () if use_cache else None
+        next_decoder_cache = [] if use_cache else None
 
         # check if head_mask/cross_attn_head_mask has a correct number of layers specified if desired
         for attn_mask, mask_name in zip([head_mask, cross_attn_head_mask], ["head_mask", "cross_attn_head_mask"]):
@@ -1136,7 +1136,7 @@ class MBartDecoder(MBartPreTrainedModel):
             hidden_states = layer_outputs[0]
 
             if use_cache:
-                next_decoder_cache += (layer_outputs[3 if output_attentions else 1],)
+                next_decoder_cache += [layer_outputs[3 if output_attentions else 1],]
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
@@ -1515,12 +1515,12 @@ class MBartForConditionalGeneration(MBartPreTrainedModel):
     @staticmethod
     @measure_times
     def _reorder_cache(past_key_values, beam_idx):
-        reordered_past = ()
+        reordered_past = []
         for layer_past in past_key_values:
             # cached cross_attention states don't have to be reordered -> they are always the same
-            reordered_past += (
-                tuple(past_state.index_select(0, beam_idx) for past_state in layer_past[:2]) + layer_past[2:],
-            )
+            reordered_past += [
+                list(past_state.index_select(0, beam_idx) for past_state in layer_past[:2]) + layer_past[2:],
+            ]
         return reordered_past
 
 

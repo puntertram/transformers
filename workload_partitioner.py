@@ -316,8 +316,7 @@ class WorkloadPartitioner:
             self.cpu_bundle.encoder_inputs_tensor = inputs_tensor_cpu
             self.cpu_bundle.encoder_attention_mask = attention_mask_cpu
             self.gpu_bundle.batch_size = inputs_tensor_gpu.shape[0]
-            self.cpu_bundle.batch_size = inputs_tensor_cpu.shape[0]
-            
+            self.cpu_bundle.batch_size = inputs_tensor_cpu.shape[0]    
 
         elif partition_type == PARTITION_TYPES.GPU:
             self.gpu_bundle.encoder_inputs_tensor = inputs_tensor
@@ -328,58 +327,223 @@ class WorkloadPartitioner:
             self.bundle.encoder_attention_mask = attention_mask
             self.bundle.batch_size = inputs_tensor.shape[0]
 
-    @measure_times
-    def partition_workload_pre_decoder(self, input_ids: torch.LongTensor, partition_type: PARTITION_TYPES, cpu_size: int, cur_len: int):
-        assert partition_type in [PARTITION_TYPES.GPU, PARTITION_TYPES.CPU_GPU, PARTITION_TYPES.BASELINE], f"Only CPU_GPU, GPU and BASELINE partition types supported, but found {partition_type}"
-        if cur_len == 1:
-            if partition_type == PARTITION_TYPES.CPU_GPU:
-                t_indices = [i for i in range(self.gpu_bundle.batch_size + self.cpu_bundle.batch_size)]
-                n_indices = [i for i in range(input_ids.shape[0])]
-                t_cpu_indices = random.sample(indices, k=cpu_size)
-                t_gpu_indices = list(filter(lambda x: x not in t_cpu_indices, t_indices))
-                t_cpu_indices_len = len(t_cpu_indices)
-                n_cpu_indices = []
-                num_beams = input_ids.shape[0] // (self.gpu_bundle.batch_size + self.cpu_bundle.batch_size)
-                for i in range(t_cpu_indices_len):
-                    n_cpu_indices.extend([t_cpu_indices[i] * num_beams + ind for ind in range(num_beams)])
-                n_gpu_indices = list(filter(lambda x: x not in n_cpu_indices, n_indices))
+    # @measure_times
+    # def partition_workload_pre_decoder(self, input_ids: torch.LongTensor, partition_type: PARTITION_TYPES, cpu_size: int, cur_len: int):
+    #     assert partition_type in [PARTITION_TYPES.GPU, PARTITION_TYPES.CPU_GPU, PARTITION_TYPES.BASELINE], f"Only CPU_GPU, GPU and BASELINE partition types supported, but found {partition_type}"
+    #     if cur_len == 1:
+    #         if partition_type == PARTITION_TYPES.CPU_GPU:
+    #             t_indices = [i for i in range(self.gpu_bundle.batch_size + self.cpu_bundle.batch_size)]
+    #             t_cpu_indices = random.sample(t_indices, k=cpu_size)
+    #             t_gpu_indices = list(filter(lambda x: x not in t_cpu_indices, t_indices))
+    #             # t_cpu_indices.sort()
+    #             tensor_staging_area = {}
+    #             if len(t_cpu_indices) > len(self.mapping_function["cpu"]):
+    #                 zeros_tensor_last_hidden_state = torch.zeros([len(t_cpu_indices) - len(self.mapping_function["cpu"]), *list(self.cpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"].shape[1:])], device="cpu")
+    #                 self.cpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"] = torch.cat([self.cpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"], zeros_tensor_last_hidden_state], dim=0)
+    #                 zeros_tensor_attention_mask = torch.zeros([len(t_cpu_indices) - len(self.mapping_function["cpu"]), *list(self.cpu_bundle.model_kwargs["attention_mask"].shape[1:])], device="cpu")
+    #                 self.cpu_bundle.model_kwargs["attention_mask"] = torch.cat([self.cpu_bundle.model_kwargs["attention_mask"], zeros_tensor_attention_mask], dim=0)
+                    
+    #             if len(t_gpu_indices) > len(self.mapping_function["gpu"]):
+    #                 zeros_tensor_last_hidden_state = torch.zeros([len(t_gpu_indices) - len(self.mapping_function["gpu"]), *list(self.gpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"].shape[1:])], device="cuda")
+    #                 self.gpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"] = torch.cat([self.gpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"], zeros_tensor_last_hidden_state], dim=0)
+    #                 zeros_tensor_attention_mask = torch.zeros([len(t_gpu_indices) - len(self.mapping_function["gpu"]), *list(self.gpu_bundle.model_kwargs["attention_mask"].shape[1:])], device="cuda")
+    #                 self.gpu_bundle.model_kwargs["attention_mask"] = torch.cat([self.gpu_bundle.model_kwargs["attention_mask"], zeros_tensor_attention_mask], dim=0)
+                    
+    #             for cpu_insert_ind, cpu_ind in enumerate(t_cpu_indices):
+    #                 if cpu_ind in self.mapping_function["gpu"]:
+    #                     # Perform a D2H transfer
+    #                     gpu_ind = self.mapping_function["gpu"].index(cpu_ind)
+    #                     # encoder_inputs_tensor_slice = self.gpu_bundle.encoder_inputs_tensor[gpu_ind].clone().detach().to("cpu")
+    #                     # encoder_attention_mask_slice = self.gpu_bundle.encoder_attention_mask[gpu_ind].clone().detach().to("cpu")
+    #                     encoder_last_hidden_state = self.gpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"][gpu_ind].clone().detach().to("cpu")
+    #                     encoder_attention_mask = self.gpu_bundle.model_kwargs["attention_mask"][gpu_ind].clone().detach().to("cpu")
+    #                     tensor_staging_area[cpu_ind] = {
+    #                         "cpu_insert_ind": cpu_insert_ind,
+    #                         "encoder_last_hidden_state": encoder_last_hidden_state,
+    #                         "encoder_attention_mask": encoder_attention_mask,
+    #                         "type": 0
+    #                     }
+    #             for gpu_insert_ind, gpu_ind in enumerate(t_gpu_indices):
+    #                 if gpu_ind in self.mapping_function["cpu"]:
+    #                     # Perform a H2D transfer
+    #                     cpu_ind = self.mapping_function["cpu"].index(gpu_ind)
+    #                     # encoder_inputs_tensor_slice = self.cpu_bundle.encoder_inputs_tensor[cpu_ind].clone().detach().to("cuda")
+    #                     # encoder_attention_mask_slice = self.cpu_bundle.encoder_attention_mask[cpu_ind].clone().detach().to("cuda")
+    #                     encoder_last_hidden_state = self.cpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"][cpu_ind].clone().detach().to("cuda")
+    #                     encoder_attention_mask = self.cpu_bundle.model_kwargs["attention_mask"][cpu_ind].clone().detach().to("cuda")
+    #                     tensor_staging_area[gpu_ind] = {
+    #                         "gpu_insert_ind": gpu_insert_ind,
+    #                         "encoder_last_hidden_state": encoder_last_hidden_state,
+    #                         "encoder_attention_mask": encoder_attention_mask,
+    #                         "type": 1
+    #                     }
                 
-                self.mapping_function = {"cpu": cpu_indices, "gpu": gpu_indices}
-                input_ids_cpu = input_ids[self.mapping_function["cpu"]].to("cpu")
-                input_ids_gpu = input_ids[self.mapping_function["gpu"]]
-                self.gpu_bundle.add_decoder_input_ids(input_ids_gpu)
-                self.cpu_bundle.add_decoder_input_ids(input_ids_cpu)
-                self.gpu_bundle.batch_size = input_ids_gpu.shape[0]
-                self.cpu_bundle.batch_size = input_ids_cpu.shape[0]
-            elif partition_type == PARTITION_TYPES.GPU:
-                self.gpu_bundle.add_decoder_input_ids(input_ids_gpu)
-                self.gpu_bundle.batch_size = input_ids_gpu.shape[0]
-            elif partition_type == PARTITION_TYPES.BASELINE:
-                self.bundle.add_decoder_input_ids(input_ids)
-                self.bundle.batch_size = input_ids.shape[0]
-        elif cur_len == 2:
-            if partition_type == PARTITION_TYPES.CPU_GPU:
-                indices = [i for i in range(input_ids.shape[0])]
-                cpu_indices = random.sample(indices, k=cpu_size)
-                gpu_indices = list(filter(lambda x: x not in cpu_indices, indices))
-                self.mapping_function = {"cpu": cpu_indices, "gpu": gpu_indices}
-                input_ids_cpu = input_ids[self.mapping_function["cpu"]].to("cpu")
-                input_ids_gpu = input_ids[self.mapping_function["gpu"]]
-                self.gpu_bundle.add_decoder_input_ids(input_ids_gpu)
-                self.cpu_bundle.add_decoder_input_ids(input_ids_cpu)
-                self.gpu_bundle.batch_size = input_ids_gpu.shape[0]
-                self.cpu_bundle.batch_size = input_ids_cpu.shape[0]
-            elif partition_type == PARTITION_TYPES.GPU:
-                self.gpu_bundle.add_decoder_input_ids(input_ids_gpu)
-                self.gpu_bundle.batch_size = input_ids_gpu.shape[0]
-            elif partition_type == PARTITION_TYPES.BASELINE:
-                self.bundle.add_decoder_input_ids(input_ids)
-                self.bundle.batch_size = input_ids.shape[0]
-        else:
-            # Nothing to do
-            pass 
+    #             for key, value in tensor_staging_area.items():
+    #                 if value["type"] == 1:
+    #                     # self.gpu_bundle.encoder_inputs_tensor[value["gpu_insert_ind"]] = value["encoder_inputs_tensor_slice"]
+    #                     # self.gpu_bundle.encoder_attention_mask[value["gpu_insert_ind"]] = value["encoder_attention_mask_slice"]
+    #                     self.gpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"][value["gpu_insert_ind"]] = value["encoder_last_hidden_state"]
+    #                     self.gpu_bundle.model_kwargs["attention_mask"][value["gpu_insert_ind"]] = value["encoder_attention_mask"]
+    #                 elif value["type"] == 0:
+    #                     # self.cpu_bundle.encoder_inputs_tensor[value["cpu_insert_ind"]] = value["encoder_inputs_tensor_slice"]
+    #                     # self.cpu_bundle.encoder_attention_mask[value["cpu_insert_ind"]] = value["encoder_attention_mask_slice"]
+    #                     self.cpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"][value["cpu_insert_ind"]] = value["encoder_last_hidden_state"]
+    #                     self.cpu_bundle.model_kwargs["attention_mask"][value["cpu_insert_ind"]] = value["encoder_attention_mask"]
+                
+    #             if len(t_cpu_indices) < len(self.mapping_function["cpu"]):
+    #                 self.cpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"] = torch.index_select(self.cpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"], 0, torch.arange( self.cpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"].size(0) - (len(self.mapping_function["cpu"]) - len(t_cpu_indices))))
+    #                 self.cpu_bundle.model_kwargs["attention_mask"] = torch.index_select(self.cpu_bundle.model_kwargs["attention_mask"], 0, torch.arange( self.cpu_bundle.model_kwargs["attention_mask"].size(0) - (len(self.mapping_function["cpu"]) - len(t_cpu_indices))))
+    #             if len(t_gpu_indices) < len(self.mapping_function["gpu"]):
+    #                 self.gpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"] = torch.index_select(self.gpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"], 0, torch.arange( self.gpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"].size(0) - (len(self.mapping_function["gpu"]) - len(t_gpu_indices))))
+    #                 self.gpu_bundle.model_kwargs["attention_mask"] = torch.index_select(self.gpu_bundle.model_kwargs["attention_mask"], 0, torch.arange( self.gpu_bundle.model_kwargs["attention_mask"].size(0) - (len(self.mapping_function["gpu"]) - len(t_gpu_indices))))
+
+
+    #             self.mapping_function = {"cpu": t_cpu_indices, "gpu": t_gpu_indices}
+    #             input_ids_cpu = input_ids[self.mapping_function["cpu"]].to("cpu")
+    #             input_ids_gpu = input_ids[self.mapping_function["gpu"]]
+    #             self.gpu_bundle.add_decoder_input_ids(input_ids_gpu)
+    #             self.cpu_bundle.add_decoder_input_ids(input_ids_cpu)
+    #             self.gpu_bundle.batch_size = input_ids_gpu.shape[0]
+    #             self.cpu_bundle.batch_size = input_ids_cpu.shape[0]
+
+    #         elif partition_type == PARTITION_TYPES.GPU:
+    #             self.gpu_bundle.add_decoder_input_ids(input_ids_gpu)
+    #             self.gpu_bundle.batch_size = input_ids_gpu.shape[0]
+    #         elif partition_type == PARTITION_TYPES.BASELINE:
+    #             self.bundle.add_decoder_input_ids(input_ids)
+    #             self.bundle.batch_size = input_ids.shape[0]
+    #     elif cur_len == 2:
+    #         if partition_type == PARTITION_TYPES.CPU_GPU:
+    #             indices = [i for i in range(input_ids.shape[0])]
+    #             cpu_indices = random.sample(indices, k=cpu_size)
+    #             gpu_indices = list(filter(lambda x: x not in cpu_indices, indices))
+    #             self.mapping_function = {"cpu": cpu_indices, "gpu": gpu_indices}
+    #             input_ids_cpu = input_ids[self.mapping_function["cpu"]].to("cpu")
+    #             input_ids_gpu = input_ids[self.mapping_function["gpu"]]
+    #             self.gpu_bundle.add_decoder_input_ids(input_ids_gpu)
+    #             self.cpu_bundle.add_decoder_input_ids(input_ids_cpu)
+    #             self.gpu_bundle.batch_size = input_ids_gpu.shape[0]
+    #             self.cpu_bundle.batch_size = input_ids_cpu.shape[0]
+    #         elif partition_type == PARTITION_TYPES.GPU:
+    #             self.gpu_bundle.add_decoder_input_ids(input_ids_gpu)
+    #             self.gpu_bundle.batch_size = input_ids_gpu.shape[0]
+    #         elif partition_type == PARTITION_TYPES.BASELINE:
+    #             self.bundle.add_decoder_input_ids(input_ids)
+    #             self.bundle.batch_size = input_ids.shape[0]
+    #     else:
+    #         # Nothing to do
+    #         pass 
     
+    @measure_times
+    def partition_workload_pre_decoder_second(self, partition_type: PARTITION_TYPES, cpu_size: int):
+        t_cpu_indices = random.sample(self.mapping_function["cpu"], k=cpu_size)
+        c_cpu_indices_one = []
+        c_cpu_indices_two = []
+        t_cpu_indices_one = []
+        for cpu_ind_sel, cpu_ind in enumerate(self.mapping_function["cpu"]):
+            if cpu_ind not in t_cpu_indices:
+                c_cpu_indices_one.append(cpu_ind_sel)
+                c_cpu_indices_two.append(cpu_ind)
+            else:
+                t_cpu_indices_one.append(cpu_ind_sel)
+        for cpu_ind_sel, cpu_ind in zip(c_cpu_indices_one, c_cpu_indices_two):
+            # make a H2D transfer
+            # encoder_last_hidden_state = self.cpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"][cpu_ind_sel].clone().detach().to("cuda")
+            num_beams = self.gpu_bundle.decoder_input_ids.shape[0] // self.gpu_bundle.batch_size
+            cpu_indices_sel = [cpu_ind_sel * num_beams + id for id in range(num_beams)]
+            encoder_attention_mask = self.cpu_bundle.model_kwargs["attention_mask"][cpu_indices_sel].clone().detach().to("cuda")
+            # self.gpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"] = torch.cat([self.gpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"], torch.unsqueeze(encoder_last_hidden_state, 0)], dim=0)
+            self.gpu_bundle.model_kwargs["attention_mask"] = torch.cat([self.gpu_bundle.model_kwargs["attention_mask"], encoder_attention_mask], dim=0)
+            for pk_idx in range(len(self.gpu_bundle.model_kwargs["past_key_values"])):
+                self.gpu_bundle.model_kwargs["past_key_values"][pk_idx][0] = torch.cat([self.gpu_bundle.model_kwargs["past_key_values"][pk_idx][0], self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][0][cpu_indices_sel, :, :].clone().detach().to("cuda")], dim=0)
+                self.gpu_bundle.model_kwargs["past_key_values"][pk_idx][1] = torch.cat([self.gpu_bundle.model_kwargs["past_key_values"][pk_idx][1], self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][1][cpu_indices_sel, :, :].clone().detach().to("cuda")], dim=0)
+                self.gpu_bundle.model_kwargs["past_key_values"][pk_idx][2] = torch.cat([self.gpu_bundle.model_kwargs["past_key_values"][pk_idx][2], self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][2][cpu_indices_sel, :, :].clone().detach().to("cuda")], dim=0)
+                self.gpu_bundle.model_kwargs["past_key_values"][pk_idx][3] = torch.cat([self.gpu_bundle.model_kwargs["past_key_values"][pk_idx][3], self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][3][cpu_indices_sel, :, :].clone().detach().to("cuda")], dim=0)
+            self.gpu_bundle.beam_scores = torch.cat([self.gpu_bundle.beam_scores, self.cpu_bundle.beam_scores[cpu_indices_sel].clone().detach().to("cuda")], dim=0)
+            self.gpu_bundle.decoder_input_ids = torch.cat([self.gpu_bundle.decoder_input_ids, self.cpu_bundle.decoder_input_ids[cpu_indices_sel].clone().detach().to("cuda")], dim=0)
+            # move beam_scorer state
+            beam_hypotheses_tensor = torch.zeros((1, self.gpu_bundle.beam_hypotheses.shape[1], self.gpu_bundle.beam_hypotheses.shape[2]), device="cuda")
+            beam_hypotheses_meta_tensor = torch.zeros((1, 3), device="cuda")
+            for beam_idx in range(num_beams):
+                if beam_idx >= len(self.cpu_bundle.beam_scorer._beam_hyps[cpu_ind_sel].beams):
+                    break
+                else:
+                    beam_hypotheses_tensor[0][beam_idx][0] = self.cpu_bundle.beam_scorer._beam_hyps[cpu_ind_sel].beams[beam_idx][1].shape[0]
+                    beam_hypotheses_tensor[0][beam_idx][1] = self.cpu_bundle.beam_scorer._beam_hyps[cpu_ind_sel].beams[beam_idx][0]
+                    beam_hypotheses_tensor[0][beam_idx][2] = -1
+                    beam_hypotheses_tensor[0][beam_idx][3] = -1        
+            self.gpu_bundle.beam_hypotheses = torch.cat([self.gpu_bundle.beam_hypotheses, beam_hypotheses_tensor], dim=0)
+            self.gpu_bundle.beam_hypotheses_meta = torch.cat([self.gpu_bundle.beam_hypotheses_meta, beam_hypotheses_meta_tensor], dim=0)
+        t_c_cpu_indices_one = c_cpu_indices_one.copy()
+        t_c_cpu_indices_one.sort()
+        t_c_cpu_indices_one.reverse()
+        for cpu_ind_sel in t_c_cpu_indices_one:
+            del self.cpu_bundle.beam_scorer._beam_hyps[cpu_ind_sel]
+            
+             
+        t_t_cpu_indices_one = torch.tensor(t_cpu_indices_one)
+        # self.cpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"] = torch.index_select(self.cpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"], 0, t_t_cpu_indices_one)
         
+        
+        batched_t_cpu_indices_one = []
+        for t_cpu_idx in t_cpu_indices_one:
+            batched_t_cpu_indices_one.extend([t_cpu_idx * num_beams + idx for idx in range(num_beams)])
+        t_batched_t_cpu_indices_one = torch.tensor(batched_t_cpu_indices_one)
+        for pk_idx in range(len(self.gpu_bundle.model_kwargs["past_key_values"])):
+            self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][0] = torch.index_select(self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][0], 0, t_batched_t_cpu_indices_one)
+            self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][1] = torch.index_select(self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][1], 0, t_batched_t_cpu_indices_one)
+            self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][2] = torch.index_select(self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][2], 0, t_batched_t_cpu_indices_one)
+            self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][3] = torch.index_select(self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][3], 0, t_batched_t_cpu_indices_one) 
+        
+        self.cpu_bundle.decoder_input_ids = torch.index_select(self.cpu_bundle.decoder_input_ids, 0, t_batched_t_cpu_indices_one)
+        self.cpu_bundle.beam_scores = torch.index_select(self.cpu_bundle.beam_scores, 0, t_batched_t_cpu_indices_one)
+        self.cpu_bundle.model_kwargs["attention_mask"] = torch.index_select(self.cpu_bundle.model_kwargs["attention_mask"], 0, t_batched_t_cpu_indices_one) 
+        self.mapping_function = {"cpu": t_cpu_indices, "gpu": self.mapping_function["gpu"] + c_cpu_indices_two}
+        self.gpu_bundle.batch_size = self.gpu_bundle.decoder_input_ids.shape[0] // num_beams
+        self.cpu_bundle.batch_size = self.cpu_bundle.decoder_input_ids.shape[0] // num_beams
+        
+
+        
+        # input_ids_cpu = input_ids[self.mapping_function["cpu"]].to("cpu")
+        # input_ids_gpu = input_ids[self.mapping_function["gpu"]]
+        # self.gpu_bundle.add_decoder_input_ids(input_ids_gpu)
+        # self.cpu_bundle.add_decoder_input_ids(input_ids_cpu)
+        # self.gpu_bundle.batch_size = input_ids_gpu.shape[0]
+        # self.cpu_bundle.batch_size = input_ids_cpu.shape[0]
+    
+    @measure_times
+    def partition_workload_pre_decoder_first(self, input_ids: torch.LongTensor, partition_type: PARTITION_TYPES, cpu_size: int):
+        assert partition_type in [PARTITION_TYPES.GPU, PARTITION_TYPES.CPU_GPU, PARTITION_TYPES.BASELINE], f"Only CPU_GPU, GPU and BASELINE partition types supported, but found {partition_type}"
+        if partition_type == PARTITION_TYPES.CPU_GPU:
+                t_cpu_indices = random.sample(self.mapping_function["cpu"], k=cpu_size)
+                c_cpu_indices_one = []
+                c_cpu_indices_two = []
+                t_cpu_indices_one = []
+                for cpu_ind_sel, cpu_ind in enumerate(self.mapping_function["cpu"]):
+                    if cpu_ind not in t_cpu_indices:
+                        c_cpu_indices_one.append(cpu_ind_sel)
+                        c_cpu_indices_two.append(cpu_ind)
+                    else:
+                        t_cpu_indices_one.append(cpu_ind_sel)
+                for cpu_ind_sel, cpu_ind in zip(c_cpu_indices_one, c_cpu_indices_two):
+                    # make a H2D transfer
+                    encoder_last_hidden_state = self.cpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"][cpu_ind_sel].clone().detach().to("cuda")
+                    encoder_attention_mask = self.cpu_bundle.model_kwargs["attention_mask"][cpu_ind_sel].clone().detach().to("cuda")
+                    self.gpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"] = torch.cat([self.gpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"], torch.unsqueeze(encoder_last_hidden_state, 0)], dim=0)
+                    self.gpu_bundle.model_kwargs["attention_mask"] = torch.cat([self.gpu_bundle.model_kwargs["attention_mask"], torch.unsqueeze(encoder_attention_mask, 0)], dim=0)
+                t_t_cpu_indices_one = torch.tensor(t_cpu_indices_one)
+                self.cpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"] = torch.index_select(self.cpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"], 0, t_t_cpu_indices_one)
+                self.cpu_bundle.model_kwargs["attention_mask"] = torch.index_select(self.cpu_bundle.model_kwargs["attention_mask"], 0, t_t_cpu_indices_one) 
+                self.mapping_function = {"cpu": t_cpu_indices, "gpu": self.mapping_function["gpu"] + c_cpu_indices_two}
+                input_ids_cpu = input_ids[self.mapping_function["cpu"]].to("cpu")
+                input_ids_gpu = input_ids[self.mapping_function["gpu"]]
+                self.gpu_bundle.add_decoder_input_ids(input_ids_gpu)
+                self.cpu_bundle.add_decoder_input_ids(input_ids_cpu)
+                self.gpu_bundle.batch_size = input_ids_gpu.shape[0]
+                self.cpu_bundle.batch_size = input_ids_cpu.shape[0]
+
+
+
     @measure_times
     def transfer_partition(self, **kwargs):
         assert kwargs is not None, f"{kwargs} passed to transfer partition method should not be None"

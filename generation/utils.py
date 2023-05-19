@@ -619,7 +619,7 @@ class GenerationMixin:
         }
 
         # Make sure to partition the model across the CPU and the GPU for the encoder
-        self.workload_partitioner.partition_workload_pre_encoder(inputs_tensor, model_kwargs_gpu["attention_mask"], PARTITION_TYPES.CPU_GPU, 3)
+        self.workload_partitioner.partition_workload_pre_encoder(inputs_tensor, model_kwargs_gpu["attention_mask"], PARTITION_TYPES.CPU_GPU, 5)
 
         # 3. make sure that encoder returns `ModelOutput`
         model_input_name = model_input_name if model_input_name is not None else self.main_input_name
@@ -1538,7 +1538,7 @@ class GenerationMixin:
                 **init_logits_processor_kwargs
             )
 
-
+            self.workload_partitioner.partition_workload_pre_decoder_first(input_ids, PARTITION_TYPES.CPU_GPU, 4)
 
             # 11. prepare beam search scorer
             self.workload_partitioner.gpu_bundle.init_beam_search_scorer(
@@ -1560,21 +1560,20 @@ class GenerationMixin:
                 max_length=generation_config.max_length,
             )
             
-            self.join()
-            self.workload_partitioner.partition_workload_pre_decoder(input_ids, PARTITION_TYPES.CPU_GPU, 1)
+            
 
             # 12. interleave input_ids with `num_beams` additional sequences per batch
-            input_ids_gpu, model_kwargs_gpu = self._expand_inputs_for_generation(
+            input_ids_gpu, self.workload_partitioner.gpu_bundle.model_kwargs = self._expand_inputs_for_generation(
                 input_ids=self.workload_partitioner.gpu_bundle.decoder_input_ids,
                 expand_size=generation_config.num_beams,
                 is_encoder_decoder=self.config.is_encoder_decoder,
-                **model_kwargs_gpu,
+                **self.workload_partitioner.gpu_bundle.model_kwargs,
             )
-            input_ids_cpu, model_kwargs_cpu = self._expand_inputs_for_generation(
+            input_ids_cpu, self.workload_partitioner.cpu_bundle.model_kwargs = self._expand_inputs_for_generation(
                 input_ids=self.workload_partitioner.cpu_bundle.decoder_input_ids,
                 expand_size=generation_config.num_beams,
                 is_encoder_decoder=self.config.is_encoder_decoder,
-                **model_kwargs_cpu,
+                **self.workload_partitioner.cpu_bundle.model_kwargs,
             )
             self.workload_partitioner.gpu_bundle.decoder_input_ids = input_ids_gpu
             self.workload_partitioner.cpu_bundle.decoder_input_ids = input_ids_cpu
@@ -1589,8 +1588,8 @@ class GenerationMixin:
                 output_scores=generation_config.output_scores,
                 return_dict_in_generate=generation_config.return_dict_in_generate,
                 synced_gpus=synced_gpus,
-                model_kwargs_gpu=model_kwargs_gpu,
-                model_kwargs_cpu=model_kwargs_cpu
+                model_kwargs_gpu=self.workload_partitioner.gpu_bundle.model_kwargs,
+                model_kwargs_cpu=self.workload_partitioner.cpu_bundle.model_kwargs
             )
 
         elif is_beam_sample_gen_mode:
@@ -3221,26 +3220,28 @@ class GenerationMixin:
 
         # initialise score of first beam with 0 and the rest with -1e9. This makes sure that only tokens
         # of the first beam are considered to avoid sampling the exact same tokens across all beams.
-        beam_scores_gpu = torch.zeros((batch_size_gpu, num_beams), dtype=torch.float, device=input_ids_gpu.device)
-        beam_scores_gpu[:, 1:] = -1e9
-        beam_scores_gpu = beam_scores_gpu.view((batch_size_gpu * num_beams,))
-        beam_hypotheses_gpu = torch.zeros(batch_size_gpu, num_beams, stopping_criteria.max_length + 4, device="cuda")
-        beam_hypotheses_meta_gpu = torch.zeros(batch_size_gpu, 3, device="cuda")
+        self.workload_partitioner.gpu_bundle.beam_scores = torch.zeros((batch_size_gpu, num_beams), dtype=torch.float, device=input_ids_gpu.device)
+        self.workload_partitioner.gpu_bundle.beam_scores[:, 1:] = -1e9
+        self.workload_partitioner.gpu_bundle.beam_scores = self.workload_partitioner.gpu_bundle.beam_scores.view((batch_size_gpu * num_beams,))
+        self.workload_partitioner.gpu_bundle.beam_hypotheses = torch.zeros(batch_size_gpu, num_beams, stopping_criteria.max_length + 4, device="cuda")
+        self.workload_partitioner.gpu_bundle.beam_hypotheses_meta = torch.zeros(batch_size_gpu, 3, device="cuda")
 
-        beam_scores_cpu = torch.zeros((batch_size_cpu, num_beams), dtype=torch.float, device=input_ids_cpu.device)
-        beam_scores_cpu[:, 1:] = -1e9
-        beam_scores_cpu = beam_scores_cpu.view((batch_size_cpu * num_beams,))
+        self.workload_partitioner.cpu_bundle.beam_scores = torch.zeros((batch_size_cpu, num_beams), dtype=torch.float, device=input_ids_cpu.device)
+        self.workload_partitioner.cpu_bundle.beam_scores[:, 1:] = -1e9
+        self.workload_partitioner.cpu_bundle.beam_scores = self.workload_partitioner.cpu_bundle.beam_scores.view((batch_size_cpu * num_beams,))
         
         this_peer_finished = False  # used by synced_gpus only
         is_gpu = True 
         is_cpu = True
         while True:
+            if max(cur_len_cpu, cur_len_gpu) == 2:
+                self.workload_partitioner.partition_workload_pre_decoder_second(PARTITION_TYPES.CPU_GPU, 2)
             if is_gpu:
-                next_tokens_gpu, next_indices_gpu, cur_len_gpu, beam_scores_gpu = self.run_gpu(
+                next_tokens_gpu, next_indices_gpu, cur_len_gpu = self.run_gpu(
                     self.workload_partitioner.gpu_bundle.decoder_input_ids,
                     self.workload_partitioner.gpu_bundle.beam_scorer,
-                    batch_size_gpu,
-                    num_beams,
+                    num_beams=num_beams,
+                    batch_size=self.workload_partitioner.gpu_bundle.batch_size,
                     logits_processor=self.workload_partitioner.gpu_bundle.logits_processor,
                     stopping_criteria=stopping_criteria,
                     max_length=max_length,
@@ -3251,20 +3252,19 @@ class GenerationMixin:
                     output_scores=output_scores,
                     return_dict_in_generate=return_dict_in_generate,
                     cur_len=cur_len_gpu,
-                    beam_scores=beam_scores_gpu,
-                    model_kwargs=model_kwargs_gpu,
+                    model_kwargs=self.workload_partitioner.gpu_bundle.model_kwargs,
                     beam_indices=beam_indices,
-                    beam_hypotheses=beam_hypotheses_gpu,
-                    beam_hypotheses_meta=beam_hypotheses_meta_gpu
+                    beam_hypotheses=self.workload_partitioner.gpu_bundle.beam_hypotheses,
+                    beam_hypotheses_meta=self.workload_partitioner.gpu_bundle.beam_hypotheses_meta
                 )
             # increase cur_len
 
             # Run a small part of the inference on the CPU so that the CPU is not underutilized
             if is_cpu:
-                next_tokens_cpu, next_indices_cpu, cur_len_cpu, beam_scores_cpu = self.run_cpu(
+                next_tokens_cpu, next_indices_cpu, cur_len_cpu = self.run_cpu(
                     input_ids=self.workload_partitioner.cpu_bundle.decoder_input_ids,
                     beam_scorer=self.workload_partitioner.cpu_bundle.beam_scorer,
-                    batch_size=batch_size_cpu,
+                    batch_size=self.workload_partitioner.cpu_bundle.batch_size,
                     num_beams=num_beams,
                     logits_processor=self.workload_partitioner.cpu_bundle.logits_processor,
                     stopping_criteria=stopping_criteria,
@@ -3276,7 +3276,6 @@ class GenerationMixin:
                     output_scores=output_scores,
                     return_dict_in_generate=return_dict_in_generate,
                     cur_len=cur_len_cpu,
-                    beam_scores=beam_scores_cpu,
                     model_kwargs=model_kwargs_cpu,
                     beam_indices=beam_indices
                 )
@@ -3292,21 +3291,21 @@ class GenerationMixin:
                 if is_gpu:
                     sequence_outputs_gpu = beam_scorer_gpu.finalize(
                         self.workload_partitioner.gpu_bundle.decoder_input_ids,
-                        beam_scores_gpu,
+                        self.workload_partitioner.gpu_bundle.beam_scores,
                         next_tokens_gpu,
                         next_indices_gpu,
                         pad_token_id=pad_token_id,
                         eos_token_id=eos_token_id,
                         max_length=stopping_criteria.max_length,
                         beam_indices=beam_indices,
-                        beam_hypotheses=beam_hypotheses_gpu,
-                        beam_hypotheses_meta=beam_hypotheses_meta_gpu
+                        beam_hypotheses=self.workload_partitioner.gpu_bundle.beam_hypotheses,
+                        beam_hypotheses_meta=self.workload_partitioner.gpu_bundle.beam_hypotheses_meta
                     )
                     self.workload_partitioner.add_sequence_outputs(sequence_outputs_gpu, PARTITION_RESIDENT_DEVICES.GPU)
                 if is_cpu:
                     sequence_outputs_cpu = beam_scorer_cpu.finalize(
                         input_ids_cpu,
-                        beam_scores_cpu,
+                        self.workload_partitioner.cpu_bundle.beam_scores,
                         next_tokens_cpu,
                         next_indices_cpu,
                         pad_token_id=pad_token_id,
@@ -3323,15 +3322,15 @@ class GenerationMixin:
                 # Transfer the cpu data bundle to the GPU and continue on the GPU
                 sequence_outputs_gpu = beam_scorer_gpu.finalize(
                     input_ids_gpu,
-                    beam_scores_gpu,
+                    self.workload_partitioner.gpu_bundle.beam_scores,
                     next_tokens_gpu,
                     next_indices_gpu,
                     pad_token_id=pad_token_id,
                     eos_token_id=eos_token_id,
                     max_length=stopping_criteria.max_length,
                     beam_indices=beam_indices,
-                    beam_hypotheses=beam_hypotheses_gpu,
-                    beam_hypotheses_meta=beam_hypotheses_meta_gpu
+                    beam_hypotheses=self.workload_partitioner.gpu_bundle.beam_hypotheses,
+                    beam_hypotheses_meta=self.workload_partitioner.gpu_bundle.beam_hypotheses_meta
                 )
                 if is_cpu:
                     self.workload_partitioner.add_sequence_outputs(sequence_outputs_gpu, PARTITION_RESIDENT_DEVICES.GPU)
@@ -3354,7 +3353,7 @@ class GenerationMixin:
                 is_gpu = True
                 sequence_outputs_cpu = beam_scorer_cpu.finalize(
                     input_ids_cpu,
-                    beam_scores_cpu,
+                    self.workload_partitioner.cpu_bundle.beam_scores,
                     next_tokens_cpu,
                     next_indices_cpu,
                     pad_token_id=pad_token_id,
@@ -3364,7 +3363,6 @@ class GenerationMixin:
                     number_of_threads=model_kwargs_cpu["number_of_threads"]
                 )
                 self.workload_partitioner.add_sequence_outputs(sequence_outputs_cpu, PARTITION_RESIDENT_DEVICES.CPU)
-        
         # Merge both cpu and gpu partitions to one single output object 
         self.workload_partitioner.join()
         if return_dict_in_generate:
@@ -3380,7 +3378,6 @@ class GenerationMixin:
         batch_size: int,
         num_beams:int,
         model_kwargs,
-        beam_scores,
         beam_indices,
         beam_hypotheses,
         beam_hypotheses_meta,
@@ -3416,8 +3413,8 @@ class GenerationMixin:
         )  # (batch_size * num_beams, vocab_size)
 
         next_token_scores_processed = logits_processor(input_ids, next_token_scores)
-        # next_token_scores = next_token_scores_processed + beam_scores[:, None].expand_as(next_token_scores)
-        next_token_scores = next_token_scores + beam_scores[:, None].expand_as(next_token_scores)
+        # next_token_scores = next_token_scores_processed + self.workload_partitioner.gpu_bundle.beam_scores[:, None].expand_as(next_token_scores)
+        next_token_scores = next_token_scores + self.workload_partitioner.gpu_bundle.beam_scores[:, None].expand_as(next_token_scores)
 
         # Store scores, attentions and hidden_states when required
         if return_dict_in_generate:
@@ -3463,7 +3460,7 @@ class GenerationMixin:
             stopping_criteria=stopping_criteria
         )
 
-        beam_scores = beam_outputs["next_beam_scores"]
+        self.workload_partitioner.gpu_bundle.beam_scores = beam_outputs["next_beam_scores"]
         beam_next_tokens = beam_outputs["next_beam_tokens"]
         beam_idx = beam_outputs["next_beam_indices"]
         cur_len += 1
@@ -3478,7 +3475,7 @@ class GenerationMixin:
 
         if return_dict_in_generate and output_scores:
             beam_indices = tuple((beam_indices[beam_idx[i]] + (beam_idx[i],) for i in range(len(beam_indices))))
-        return beam_next_tokens, beam_idx, cur_len, beam_scores
+        return beam_next_tokens, beam_idx, cur_len
         
     
     
@@ -3489,7 +3486,6 @@ class GenerationMixin:
         beam_scorer: BeamScorer,
         batch_size: int,
         num_beams: int,
-        beam_scores,
         beam_indices,
         cur_len,
         model_kwargs,
@@ -3522,7 +3518,7 @@ class GenerationMixin:
         )  # (batch_size * num_beams, vocab_size)
 
         next_token_scores_processed = logits_processor(input_ids, next_token_scores)
-        next_token_scores = next_token_scores_processed + beam_scores[:, None].expand_as(next_token_scores)
+        next_token_scores = next_token_scores_processed + self.workload_partitioner.cpu_bundle.beam_scores[:, None].expand_as(next_token_scores)
 
         # Store scores, attentions and hidden_states when required
         if return_dict_in_generate:
@@ -3566,7 +3562,7 @@ class GenerationMixin:
             number_of_threads=model_kwargs["number_of_threads"]
         )
 
-        beam_scores = beam_outputs["next_beam_scores"]
+        self.workload_partitioner.cpu_bundle.beam_scores = beam_outputs["next_beam_scores"]
         beam_next_tokens = beam_outputs["next_beam_tokens"]
         beam_idx = beam_outputs["next_beam_indices"]
         cur_len += 1
@@ -3582,7 +3578,7 @@ class GenerationMixin:
 
         if return_dict_in_generate and output_scores:
             beam_indices = tuple((beam_indices[beam_idx[i]] + (beam_idx[i],) for i in range(len(beam_indices))))
-        return beam_next_tokens, beam_idx, cur_len, beam_scores
+        return beam_next_tokens, beam_idx, cur_len
 
     @measure_times
     def beam_sample(

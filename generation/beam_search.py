@@ -631,7 +631,7 @@ class BeamSearchScorerGPU(BeamScorer):
         
     ) -> Tuple[torch.Tensor]:
         cur_len = input_ids.shape[-1]
-        batch_size = len(self._beam_hyps)
+        batch_size = beam_hypotheses.shape[0]
         if not (batch_size == (input_ids.shape[0] // self.group_size)):
             if self.num_beam_groups > 1:
                 raise ValueError(
@@ -692,27 +692,6 @@ class BeamSearchScorerGPU(BeamScorer):
             next_beam_tokens = n_next_beam_tokens.to(torch.long)
             next_beam_indices = n_next_beam_indices.to(torch.long)
             self._done = n_done.to(torch.bool)
-        else:
-            self.process_cpu( 
-                input_ids, 
-                next_scores,
-                next_tokens,
-                next_indices,
-                next_beam_scores,
-                next_beam_tokens,
-                next_beam_indices,
-                cur_len,
-                pad_token_id,
-                eos_token_id,
-                beam_indices
-            )
-            # torch.cuda.synchronize()
-            # print("cpu...")
-            # assert torch.all(n_done == next_beam_tokens), "n_next_beam_tokens == next_beam_tokens break"
-            # assert torch.all(n_next_beam_tokens == next_beam_tokens), "n_next_beam_tokens == next_beam_tokens break"
-            # assert torch.all(n_next_beam_scores == next_beam_scores), "n_next_beam_scores == next_beam_scores break"
-            # assert torch.all(n_next_beam_indices == next_beam_indices), "n_next_beam_indices == next_beam_indices break"
-            
         return UserDict(
             {
                 "next_beam_scores": next_beam_scores.view(-1),
@@ -721,82 +700,6 @@ class BeamSearchScorerGPU(BeamScorer):
             }
         )
     
-    @measure_times
-    def process_cpu(
-            self,
-        input_ids: torch.LongTensor,
-        next_scores: torch.FloatTensor,
-        next_tokens: torch.LongTensor,
-        next_indices: torch.LongTensor,
-        next_beam_scores: torch.FloatTensor,
-        next_beam_tokens: torch.FloatTensor,
-        next_beam_indices: torch.FloatTensor,
-        cur_len,
-        pad_token_id: Optional[int] = None,
-        eos_token_id: Optional[int] = None,
-        beam_indices: Optional[torch.LongTensor] = None,
-    ):
-        for batch_idx, beam_hyp in enumerate(self._beam_hyps):
-            if self._done[batch_idx]:
-                if self.num_beams < len(beam_hyp):
-                    raise ValueError(
-                        f"Batch can only be done if at least {self.num_beams} beams have been generated")
-                if eos_token_id is None or pad_token_id is None:
-                    raise ValueError(
-                        "Generated beams >= num_beams -> eos_token_id and pad_token have to be defined")
-                # pad the batch
-                next_beam_scores[batch_idx, :] = 0
-                next_beam_tokens[batch_idx, :] = pad_token_id
-                next_beam_indices[batch_idx, :] = 0
-                continue
-
-            # next tokens for this sentence
-            beam_idx = 0
-            for beam_token_rank, (next_token, next_score, next_index) in enumerate(
-                zip(next_tokens[batch_idx],
-                    next_scores[batch_idx], next_indices[batch_idx])
-            ):
-                batch_beam_idx = batch_idx * self.group_size + next_index
-                # add to generated hypotheses if end of sentence
-                if (eos_token_id is not None) and (next_token.item() == eos_token_id):
-                    # if beam_token does not belong to top num_beams tokens, it should not be added
-                    is_beam_token_worse_than_top_num_beams = beam_token_rank >= self.group_size
-                    if is_beam_token_worse_than_top_num_beams:
-                        continue
-                    if beam_indices is not None:
-                        beam_index = beam_indices[batch_beam_idx]
-                        beam_index = beam_index + (batch_beam_idx,)
-                    else:
-                        beam_index = None
-
-                    beam_hyp.add(
-                        input_ids[batch_beam_idx],
-                        next_score.item(),
-                        beam_indices=beam_index,
-                    )
-                else:
-                    # add next predicted token since it is not eos_token
-                    # print(f"[cpu][{batch_idx}][{beam_idx}]  Adding {next_score}, {next_token}, {batch_beam_idx}")
-                    next_beam_scores[batch_idx, beam_idx] = next_score
-                    next_beam_tokens[batch_idx, beam_idx] = next_token
-                    next_beam_indices[batch_idx, beam_idx] = batch_beam_idx
-                    beam_idx += 1
-
-                # once the beam for next step is full, don't add more tokens to it.
-                if beam_idx == self.group_size:
-                    break
-
-            if beam_idx < self.group_size:
-                raise ValueError(
-                    f"At most {self.group_size} tokens in {next_tokens[batch_idx]} can be equal to `eos_token_id:"
-                    f" {eos_token_id}`. Make sure {next_tokens[batch_idx]} are corrected."
-                )
-
-            # Check if we are done so that we can save a pad step if all(done)
-            self._done[batch_idx] = self._done[batch_idx] or beam_hyp.is_done(
-                next_scores[batch_idx].max().item(), cur_len
-            )
-
     @measure_times
     def finalize(
         self,
@@ -812,139 +715,36 @@ class BeamSearchScorerGPU(BeamScorer):
         beam_indices: Optional[torch.LongTensor] = None,
     ) -> Tuple[torch.LongTensor]:
         
-        batch_size = len(self._beam_hyps)
-
-        if beam_indices is not None:
-            return self.finalize_cpu(
-                input_ids=input_ids,
-                final_beam_scores=final_beam_scores,
-                final_beam_tokens=final_beam_tokens,
-                final_beam_indices=final_beam_indices,
-                max_length=max_length,
-                beam_hypotheses=beam_hypotheses,
-                beam_hypotheses_meta=beam_hypotheses_meta,
-                pad_token_id=pad_token_id,
-                eos_token_id=eos_token_id,
-                beam_indices=beam_indices
-            )
-        else:
-            import custom_beam_search_cuda
-            n_done = self._done.to(torch.float32)
-            n_input_ids = input_ids.to(torch.float32)
-            custom_beam_search_cuda._beam_search_finalize(
-                batch_size,
-                self.num_beams,
-                self.num_beam_hyps_to_keep,
-                n_input_ids,
-                final_beam_scores,
-                beam_hypotheses,
-                beam_hypotheses_meta,
-                n_done
-            )
-            # prepare for adding eos
-            beam_hypotheses = beam_hypotheses.to("cpu")
-            beam_hypotheses_meta = beam_hypotheses_meta.to("cpu")
-            sent_lengths = torch.zeros(batch_size * self.num_beam_hyps_to_keep, device="cpu", dtype=torch.long)
-            best = [None] * (batch_size * self.num_beam_hyps_to_keep)
-            best_scores = torch.zeros(batch_size * self.num_beam_hyps_to_keep, device="cpu")
-            for batch_idx in range(batch_size):
-                for j in range(self.num_beams):
-                    if beam_hypotheses[batch_idx][j][3] != -1:
-                        sent_lengths[batch_idx * self.num_beam_hyps_to_keep + int(beam_hypotheses[batch_idx][j][3].item())] = int(beam_hypotheses[batch_idx][j][0].item())
-                        best[batch_idx * self.num_beam_hyps_to_keep + int(beam_hypotheses[batch_idx][j][3].item())] = beam_hypotheses[batch_idx][j][4: 4 + int(beam_hypotheses[batch_idx][j][0].item())]
-                        best_scores[batch_idx * self.num_beam_hyps_to_keep + int(beam_hypotheses[batch_idx][j][3].item())] = beam_hypotheses[batch_idx][j][1]
-            sent_lengths_max = int(sent_lengths.max().item()) + 1
-            sent_max_len = min(sent_lengths_max, max_length) if max_length is not None else sent_lengths_max
-            decoded: torch.LongTensor = torch.zeros(batch_size * self.num_beam_hyps_to_keep, sent_max_len, device="cpu", dtype=torch.long)
-            indices = None
-
-            # shorter batches are padded if needed
-            if sent_lengths.min().item() != sent_lengths.max().item():
-                assert pad_token_id is not None, "`pad_token_id` has to be defined"
-                decoded.fill_(pad_token_id)
-
-            if indices is not None:
-                indices.fill_(-1)
-
-            # fill with hypotheses and eos_token_id if the latter fits in
-            for i, hypo in enumerate(best):
-                decoded[i, : sent_lengths[i]] = hypo
-
-                if sent_lengths[i] < sent_max_len:
-                    decoded[i, sent_lengths[i]] = eos_token_id[0]
-
-            return UserDict(
-                {
-                    "sequences": decoded,
-                    "sequence_scores": best_scores,
-                    "beam_indices": indices,
-                }
-            )
-
-    @measure_times
-    def finalize_cpu(
-        self,
-        input_ids: torch.LongTensor,
-        final_beam_scores: torch.FloatTensor,
-        final_beam_tokens: torch.LongTensor,
-        final_beam_indices: torch.LongTensor,
-        max_length: int,
-        beam_hypotheses,
-        beam_hypotheses_meta,
-        pad_token_id: Optional[int] = None,
-        eos_token_id: Optional[int] = None,
-        beam_indices: Optional[torch.LongTensor] = None,
-    ) -> Tuple[torch.LongTensor]:
-        batch_size = len(self._beam_hyps)
-
-        # finalize all open beam hypotheses and add to generated hypotheses
-        for batch_idx, beam_hyp in enumerate(self._beam_hyps):
-            if self._done[batch_idx]:
-                continue
-
-            # all open beam hypotheses are added to the beam hypothesis
-            # beam hypothesis class automatically keeps the best beams
-            for beam_id in range(self.num_beams):
-                batch_beam_idx = batch_idx * self.num_beams + beam_id
-                final_score = final_beam_scores[batch_beam_idx].item()
-                final_tokens = input_ids[batch_beam_idx]
-                beam_index = beam_indices[batch_beam_idx] if beam_indices is not None else None
-                beam_hyp.add(final_tokens, final_score, beam_indices=beam_index)
-
-        # select the best hypotheses
-        sent_lengths = input_ids.new(batch_size * self.num_beam_hyps_to_keep)
-        best = []
-        best_indices = []
-        best_scores = torch.zeros(batch_size * self.num_beam_hyps_to_keep, device=self.device, dtype=torch.float32)
-
-
-        # retrieve best hypotheses
-        for i, beam_hyp in enumerate(self._beam_hyps):
-            sorted_hyps = sorted(beam_hyp.beams, key=lambda x: x[0])
-            for j in range(self.num_beam_hyps_to_keep):
-                best_hyp_tuple = sorted_hyps.pop()
-                best_score = best_hyp_tuple[0]
-                best_hyp = best_hyp_tuple[1]
-                best_index = best_hyp_tuple[2]
-                sent_lengths[self.num_beam_hyps_to_keep * i + j] = len(best_hyp)
-
-                # append hyp to lists
-                best.append(best_hyp)
-
-                # append indices to list
-                best_indices.append(best_index)
-
-                best_scores[i * self.num_beam_hyps_to_keep + j] = best_score
-
+        batch_size = beam_hypotheses.shape[0]
+        import custom_beam_search_cuda
+        n_done = self._done.to(torch.float32)
+        n_input_ids = input_ids.to(torch.float32)
+        custom_beam_search_cuda._beam_search_finalize(
+            batch_size,
+            self.num_beams,
+            self.num_beam_hyps_to_keep,
+            n_input_ids,
+            final_beam_scores,
+            beam_hypotheses,
+            beam_hypotheses_meta,
+            n_done
+        )
         # prepare for adding eos
-        sent_lengths_max = sent_lengths.max().item() + 1
+        beam_hypotheses = beam_hypotheses.to("cpu")
+        beam_hypotheses_meta = beam_hypotheses_meta.to("cpu")
+        sent_lengths = torch.zeros(batch_size * self.num_beam_hyps_to_keep, device="cpu", dtype=torch.long)
+        best = [None] * (batch_size * self.num_beam_hyps_to_keep)
+        best_scores = torch.zeros(batch_size * self.num_beam_hyps_to_keep, device="cpu")
+        for batch_idx in range(batch_size):
+            for j in range(self.num_beams):
+                if beam_hypotheses[batch_idx][j][3] != -1:
+                    sent_lengths[batch_idx * self.num_beam_hyps_to_keep + int(beam_hypotheses[batch_idx][j][3].item())] = int(beam_hypotheses[batch_idx][j][0].item())
+                    best[batch_idx * self.num_beam_hyps_to_keep + int(beam_hypotheses[batch_idx][j][3].item())] = beam_hypotheses[batch_idx][j][4: 4 + int(beam_hypotheses[batch_idx][j][0].item())]
+                    best_scores[batch_idx * self.num_beam_hyps_to_keep + int(beam_hypotheses[batch_idx][j][3].item())] = beam_hypotheses[batch_idx][j][1]
+        sent_lengths_max = int(sent_lengths.max().item()) + 1
         sent_max_len = min(sent_lengths_max, max_length) if max_length is not None else sent_lengths_max
-        decoded: torch.LongTensor = input_ids.new(batch_size * self.num_beam_hyps_to_keep, sent_max_len)
-
-        if len(best_indices) > 0 and best_indices[0] is not None:
-            indices: torch.LongTensor = input_ids.new(batch_size * self.num_beam_hyps_to_keep, sent_max_len)
-        else:
-            indices = None
+        decoded: torch.LongTensor = torch.zeros(batch_size * self.num_beam_hyps_to_keep, sent_max_len, device="cpu", dtype=torch.long)
+        indices = None
 
         # shorter batches are padded if needed
         if sent_lengths.min().item() != sent_lengths.max().item():
@@ -955,14 +755,11 @@ class BeamSearchScorerGPU(BeamScorer):
             indices.fill_(-1)
 
         # fill with hypotheses and eos_token_id if the latter fits in
-        for i, (hypo, best_idx) in enumerate(zip(best, best_indices)):
+        for i, hypo in enumerate(best):
             decoded[i, : sent_lengths[i]] = hypo
 
-            if indices is not None:
-                indices[i, : len(best_idx)] = torch.tensor(best_idx)
-
             if sent_lengths[i] < sent_max_len:
-                decoded[i, sent_lengths[i]] = eos_token_id
+                decoded[i, sent_lengths[i]] = eos_token_id[0]
 
         return UserDict(
             {
@@ -972,6 +769,7 @@ class BeamSearchScorerGPU(BeamScorer):
             }
         )
 
+    
 
 
 class BeamSearchScorer(BeamScorer):
