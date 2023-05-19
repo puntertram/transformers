@@ -22,6 +22,7 @@ import torch
 import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+import custom_beam_search_cuda
 
 from ...activations import ACT2FN
 from ...modeling_outputs import (
@@ -277,8 +278,13 @@ class MBartAttention(nn.Module):
             attn_weights_reshaped = None
 
         attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
-
-        attn_output = torch.bmm(attn_probs, value_states)
+        
+        threshold = 1e-4
+        # total_size = ((attn_probs < threshold).shape[0] * (attn_probs < threshold).shape[1] * (attn_probs < threshold).shape[2])
+        # print(f"Number, % of removed computations {torch.sum((attn_probs < threshold).to(torch.int))},  {(torch.sum((attn_probs < threshold).to(torch.int)) / total_size) * 100}%")
+        # attn_probs[attn_probs < threshold] = 0.0
+        attn_output = custom_beam_search_cuda.mha_with_threshold(attn_probs, value_states, threshold)
+        # attn_output = torch.bmm(attn_probs, value_states)
 
         if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
             raise ValueError(
