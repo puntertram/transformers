@@ -508,12 +508,13 @@ class WorkloadPartitioner:
                 c_cpu_indices_one = []
                 c_cpu_indices_two = []
                 t_cpu_indices_one = []
+                for cpu_ind in t_cpu_indices:
+                    cpu_ind_sel = self.mapping_function["cpu"].index(cpu_ind)
+                    t_cpu_indices_one.append(cpu_ind_sel)
                 for cpu_ind_sel, cpu_ind in enumerate(self.mapping_function["cpu"]):
                     if cpu_ind not in t_cpu_indices:
                         c_cpu_indices_one.append(cpu_ind_sel)
                         c_cpu_indices_two.append(cpu_ind)
-                    else:
-                        t_cpu_indices_one.append(cpu_ind_sel)
                 for cpu_ind_sel, cpu_ind in zip(c_cpu_indices_one, c_cpu_indices_two):
                     # make a H2D transfer
                     encoder_last_hidden_state = self.cpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"][cpu_ind_sel].clone().detach().to("cuda")
