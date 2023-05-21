@@ -1561,7 +1561,7 @@ class GenerationMixin:
             )
             
 
-            self.workload_partitioner.partition_workload_pre_decoder(input_ids, PARTITION_TYPES.CPU_GPU, 1)
+            self.workload_partitioner.partition_workload_pre_decoder(input_ids, PARTITION_TYPES.CPU_GPU, 4)
 
             # 12. interleave input_ids with `num_beams` additional sequences per batch
             input_ids_gpu, model_kwargs_gpu = self._expand_inputs_for_generation(
@@ -3335,15 +3335,15 @@ class GenerationMixin:
                 )
                 if is_cpu:
                     self.workload_partitioner.add_sequence_outputs(sequence_outputs_gpu, PARTITION_RESIDENT_DEVICES.GPU)
-                    wp_kwargs = {
-                        "from": PARTITION_RESIDENT_DEVICES.CPU,
-                        "to": PARTITION_RESIDENT_DEVICES.GPU
-                    }
-                    self.workload_partitioner.transfer_partition(**wp_kwargs)
-                    is_cpu = False
-                    is_gpu = True
+                    # wp_kwargs = {
+                    #     "from": PARTITION_RESIDENT_DEVICES.CPU,
+                    #     "to": PARTITION_RESIDENT_DEVICES.GPU
+                    # }
+                    # self.workload_partitioner.transfer_partition(**wp_kwargs)
+                    is_cpu = True
+                    is_gpu = False
                 else:
-                    self.workload_partitioner.add_sequence_outputs(sequence_outputs_gpu, PARTITION_RESIDENT_DEVICES.CPU_GPU)
+                    self.workload_partitioner.add_sequence_outputs(sequence_outputs_cpu, PARTITION_RESIDENT_DEVICES.CPU)
                     is_cpu = False
                     is_gpu = False 
                     break
