@@ -61,17 +61,6 @@ class WorkloadBundle:
         self.input_ids = None
         self.resident_device = resident_device
 
-
-    def transfer(
-        self,
-        to: PARTITION_RESIDENT_DEVICES
-    ):
-        assert self.resident_device == PARTITION_RESIDENT_DEVICES.CPU and to == PARTITION_RESIDENT_DEVICES.GPU, f"Expected  \
-            cpu to gpu transfer, got {self.resident_device} to {to} transfer..."
-        if self.resident_device == PARTITION_RESIDENT_DEVICES.CPU and to == PARTITION_RESIDENT_DEVICES.GPU:
-            # Transfer all the tensors to the GPU
-            pass
-        
     @measure_times
     def _merge_criteria_processor_list(
         self,
@@ -552,8 +541,75 @@ class WorkloadPartitioner:
 
         if kwargs["from"] == PARTITION_RESIDENT_DEVICES.CPU:
             #  Transfer the cpu bundle to the gpu
-            self.cpu_bundle.transfer(kwargs["to"])
             self.cpu_bundle.resident_device = PARTITION_RESIDENT_DEVICES.CPU_GPU
+            t_cpu_indices = []
+            c_cpu_indices_one = []
+            c_cpu_indices_two = []
+            t_cpu_indices_one = []
+            for cpu_ind_sel, cpu_ind in enumerate(self.mapping_function["cpu"]):
+                if cpu_ind not in t_cpu_indices:
+                    c_cpu_indices_one.append(cpu_ind_sel)
+                    c_cpu_indices_two.append(cpu_ind)
+                else:
+                    t_cpu_indices_one.append(cpu_ind_sel)
+            num_beams = self.gpu_bundle.decoder_input_ids.shape[0] // self.gpu_bundle.batch_size
+            for cpu_ind_sel, cpu_ind in zip(c_cpu_indices_one, c_cpu_indices_two):
+                # make a H2D transfer
+                # encoder_last_hidden_state = self.cpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"][cpu_ind_sel].clone().detach().to("cuda")
+                
+                cpu_indices_sel = [cpu_ind_sel * num_beams + id for id in range(num_beams)]
+                encoder_attention_mask = self.cpu_bundle.model_kwargs["attention_mask"][cpu_indices_sel].clone().detach().to("cuda")
+                # self.gpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"] = torch.cat([self.gpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"], torch.unsqueeze(encoder_last_hidden_state, 0)], dim=0)
+                self.gpu_bundle.model_kwargs["attention_mask"] = torch.cat([self.gpu_bundle.model_kwargs["attention_mask"], encoder_attention_mask], dim=0)
+                for pk_idx in range(len(self.gpu_bundle.model_kwargs["past_key_values"])):
+                    self.gpu_bundle.model_kwargs["past_key_values"][pk_idx][0] = torch.cat([self.gpu_bundle.model_kwargs["past_key_values"][pk_idx][0], self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][0][cpu_indices_sel, :, :].clone().detach().to("cuda")], dim=0)
+                    self.gpu_bundle.model_kwargs["past_key_values"][pk_idx][1] = torch.cat([self.gpu_bundle.model_kwargs["past_key_values"][pk_idx][1], self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][1][cpu_indices_sel, :, :].clone().detach().to("cuda")], dim=0)
+                    self.gpu_bundle.model_kwargs["past_key_values"][pk_idx][2] = torch.cat([self.gpu_bundle.model_kwargs["past_key_values"][pk_idx][2], self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][2][cpu_indices_sel, :, :].clone().detach().to("cuda")], dim=0)
+                    self.gpu_bundle.model_kwargs["past_key_values"][pk_idx][3] = torch.cat([self.gpu_bundle.model_kwargs["past_key_values"][pk_idx][3], self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][3][cpu_indices_sel, :, :].clone().detach().to("cuda")], dim=0)
+                self.gpu_bundle.beam_scores = torch.cat([self.gpu_bundle.beam_scores, self.cpu_bundle.beam_scores[cpu_indices_sel].clone().detach().to("cuda")], dim=0)
+                self.gpu_bundle.decoder_input_ids = torch.cat([self.gpu_bundle.decoder_input_ids, self.cpu_bundle.decoder_input_ids[cpu_indices_sel].clone().detach().to("cuda")], dim=0)
+                # move beam_scorer state
+                beam_hypotheses_tensor = torch.zeros((1, self.gpu_bundle.beam_hypotheses.shape[1], self.gpu_bundle.beam_hypotheses.shape[2]), device="cuda")
+                beam_hypotheses_meta_tensor = torch.zeros((1, 3), device="cuda")
+                for beam_idx in range(num_beams):
+                    if beam_idx >= len(self.cpu_bundle.beam_scorer._beam_hyps[cpu_ind_sel].beams):
+                        break
+                    else:
+                        beam_hypotheses_tensor[0][beam_idx][0] = self.cpu_bundle.beam_scorer._beam_hyps[cpu_ind_sel].beams[beam_idx][1].shape[0]
+                        beam_hypotheses_tensor[0][beam_idx][1] = self.cpu_bundle.beam_scorer._beam_hyps[cpu_ind_sel].beams[beam_idx][0]
+                        beam_hypotheses_tensor[0][beam_idx][2] = -1
+                        beam_hypotheses_tensor[0][beam_idx][3] = -1        
+                self.gpu_bundle.beam_hypotheses = torch.cat([self.gpu_bundle.beam_hypotheses, beam_hypotheses_tensor], dim=0)
+                self.gpu_bundle.beam_hypotheses_meta = torch.cat([self.gpu_bundle.beam_hypotheses_meta, beam_hypotheses_meta_tensor], dim=0)
+            t_c_cpu_indices_one = c_cpu_indices_one.copy()
+            t_c_cpu_indices_one.sort()
+            t_c_cpu_indices_one.reverse()
+            for cpu_ind_sel in t_c_cpu_indices_one:
+                del self.cpu_bundle.beam_scorer._beam_hyps[cpu_ind_sel]
+                
+                
+            # t_t_cpu_indices_one = torch.tensor(t_cpu_indices_one)
+            # # self.cpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"] = torch.index_select(self.cpu_bundle.model_kwargs["encoder_outputs"]["last_hidden_state"], 0, t_t_cpu_indices_one)
+            
+            
+            # batched_t_cpu_indices_one = []
+            # for t_cpu_idx in t_cpu_indices_one:
+            #     batched_t_cpu_indices_one.extend([t_cpu_idx * num_beams + idx for idx in range(num_beams)])
+            # t_batched_t_cpu_indices_one = torch.tensor(batched_t_cpu_indices_one)
+            # for pk_idx in range(len(self.gpu_bundle.model_kwargs["past_key_values"])):
+            #     self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][0] = torch.index_select(self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][0], 0, t_batched_t_cpu_indices_one)
+            #     self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][1] = torch.index_select(self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][1], 0, t_batched_t_cpu_indices_one)
+            #     self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][2] = torch.index_select(self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][2], 0, t_batched_t_cpu_indices_one)
+            #     self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][3] = torch.index_select(self.cpu_bundle.model_kwargs["past_key_values"][pk_idx][3], 0, t_batched_t_cpu_indices_one) 
+            
+            # self.cpu_bundle.decoder_input_ids = torch.index_select(self.cpu_bundle.decoder_input_ids, 0, t_batched_t_cpu_indices_one)
+            # self.cpu_bundle.beam_scores = torch.index_select(self.cpu_bundle.beam_scores, 0, t_batched_t_cpu_indices_one)
+            # self.cpu_bundle.model_kwargs["attention_mask"] = torch.index_select(self.cpu_bundle.model_kwargs["attention_mask"], 0, t_batched_t_cpu_indices_one) 
+            self.mapping_function = {"cpu": t_cpu_indices, "gpu": self.mapping_function["gpu"] + c_cpu_indices_two}
+            self.gpu_bundle.batch_size = self.gpu_bundle.decoder_input_ids.shape[0] // num_beams
+            self.cpu_bundle.batch_size = self.cpu_bundle.decoder_input_ids.shape[0] // num_beams
+            
+
 
 
     def add_sequence_outputs(self, sequence_outputs, resident_device:PARTITION_RESIDENT_DEVICES):

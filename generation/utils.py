@@ -1538,7 +1538,7 @@ class GenerationMixin:
                 **init_logits_processor_kwargs
             )
 
-            self.workload_partitioner.partition_workload_pre_decoder_first(input_ids, PARTITION_TYPES.CPU_GPU, 4)
+            self.workload_partitioner.partition_workload_pre_decoder_first(input_ids, PARTITION_TYPES.CPU_GPU, 1)
 
             # 11. prepare beam search scorer
             self.workload_partitioner.gpu_bundle.init_beam_search_scorer(
@@ -3234,8 +3234,8 @@ class GenerationMixin:
         is_gpu = True 
         is_cpu = True
         while True:
-            if max(cur_len_cpu, cur_len_gpu) == 2:
-                self.workload_partitioner.partition_workload_pre_decoder_second(PARTITION_TYPES.CPU_GPU, 2)
+            # if max(cur_len_cpu, cur_len_gpu) == 2:
+            #     self.workload_partitioner.partition_workload_pre_decoder_second(PARTITION_TYPES.CPU_GPU, 2)
             if is_gpu:
                 next_tokens_gpu, next_indices_gpu, cur_len_gpu = self.run_gpu(
                     self.workload_partitioner.gpu_bundle.decoder_input_ids,
@@ -3334,13 +3334,14 @@ class GenerationMixin:
                 )
                 if is_cpu:
                     self.workload_partitioner.add_sequence_outputs(sequence_outputs_gpu, PARTITION_RESIDENT_DEVICES.GPU)
-                    wp_kwargs = {
-                        "from": PARTITION_RESIDENT_DEVICES.CPU,
-                        "to": PARTITION_RESIDENT_DEVICES.GPU
-                    }
-                    self.workload_partitioner.transfer_partition(**wp_kwargs)
-                    is_cpu = False
-                    is_gpu = True
+                    # wp_kwargs = {
+                    #     "from": PARTITION_RESIDENT_DEVICES.CPU,
+                    #     "to": PARTITION_RESIDENT_DEVICES.GPU
+                    # }
+                    # self.workload_partitioner.transfer_partition(**wp_kwargs)
+                    is_cpu = True
+                    is_gpu = False
+                    done_cpu = False
                 else:
                     self.workload_partitioner.add_sequence_outputs(sequence_outputs_gpu, PARTITION_RESIDENT_DEVICES.CPU_GPU)
                     is_cpu = False
