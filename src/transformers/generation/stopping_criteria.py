@@ -8,7 +8,7 @@ import torch
 
 from ..utils import add_start_docstrings
 
-from custom_time_profile_gpu import measure_times
+
 
 STOPPING_CRITERIA_INPUTS_DOCSTRING = r"""
     Args:
@@ -35,7 +35,7 @@ class StoppingCriteria(ABC):
     """Abstract base class for all stopping criteria that can be applied during generation."""
 
     @add_start_docstrings(STOPPING_CRITERIA_INPUTS_DOCSTRING)
-    @measure_times
+    
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
         raise NotImplementedError("StoppingCriteria needs to be subclassed")
 
@@ -71,7 +71,7 @@ class MaxNewTokensCriteria(StoppingCriteria):
             The maximum number of tokens to generate.
     """
 
-    @measure_times
+    
     def __init__(self, start_length: int, max_new_tokens: int):
         warnings.warn(
             "The class `MaxNewTokensCriteria` is deprecated. "
@@ -84,7 +84,7 @@ class MaxNewTokensCriteria(StoppingCriteria):
         self.max_length = start_length + max_new_tokens
 
     @add_start_docstrings(STOPPING_CRITERIA_INPUTS_DOCSTRING)
-    @measure_times
+    
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
         return input_ids.shape[-1] >= self.max_length
 
@@ -102,25 +102,25 @@ class MaxTimeCriteria(StoppingCriteria):
             The start of the generation allowed time.
     """
 
-    @measure_times
+    
     def __init__(self, max_time: float, initial_timestamp: Optional[float] = None):
         self.max_time = max_time
         self.initial_timestamp = time.time() if initial_timestamp is None else initial_timestamp
 
     @add_start_docstrings(STOPPING_CRITERIA_INPUTS_DOCSTRING)
-    @measure_times
+    
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
         return time.time() - self.initial_timestamp > self.max_time
 
 
 class StoppingCriteriaList(list):
     @add_start_docstrings(STOPPING_CRITERIA_INPUTS_DOCSTRING)
-    @measure_times
+    
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
         return any(criteria(input_ids, scores) for criteria in self)
 
     @property
-    @measure_times
+    
     def max_length(self) -> Optional[int]:
         for stopping_criterium in self:
             if isinstance(stopping_criterium, MaxLengthCriteria):
@@ -130,7 +130,7 @@ class StoppingCriteriaList(list):
         return None
 
 
-@measure_times
+
 def validate_stopping_criteria(stopping_criteria: StoppingCriteriaList, max_length: int) -> StoppingCriteriaList:
     stopping_max_length = stopping_criteria.max_length
     new_stopping_criteria = deepcopy(stopping_criteria)
