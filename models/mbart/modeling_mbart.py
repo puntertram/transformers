@@ -23,6 +23,8 @@ import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
+import intel_extension_for_pytorch as ipex
+
 from ...activations import ACT2FN
 from ...modeling_outputs import (
     BaseModelOutput,
@@ -1341,6 +1343,7 @@ class MBartForConditionalGeneration(MBartPreTrainedModel):
             model_cpu = copy.deepcopy(self)
             custom_transfer_function(self)
             self.model_cpu = model_cpu.to("cpu")
+            self.model_cpu = ipex.optimize(self.model_cpu)
            
             
 
