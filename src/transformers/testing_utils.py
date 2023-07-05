@@ -145,6 +145,7 @@ _run_custom_tokenizers = parse_flag_from_env("RUN_CUSTOM_TOKENIZERS", default=Fa
 _run_staging = parse_flag_from_env("HUGGINGFACE_CO_STAGING", default=False)
 _run_git_lfs_tests = parse_flag_from_env("RUN_GIT_LFS_TESTS", default=False)
 _tf_gpu_memory_limit = parse_int_from_env("TF_GPU_MEMORY_LIMIT", default=None)
+_run_pipeline_tests = parse_flag_from_env("RUN_PIPELINE_TESTS", default=True)
 
 
 def is_pt_tf_cross_test(test_case):
@@ -200,6 +201,22 @@ def is_staging_test(test_case):
             return test_case
         else:
             return pytest.mark.is_staging_test()(test_case)
+
+
+def is_pipeline_test(test_case):
+    """
+    Decorator marking a test as a pipeline test. If RUN_PIPELINE_TESTS is set to a falsy value, those tests will be
+    skipped.
+    """
+    if not _run_pipeline_tests:
+        return unittest.skip("test is pipeline test")(test_case)
+    else:
+        try:
+            import pytest  # We don't need a hard dependency on pytest in the main library
+        except ImportError:
+            return test_case
+        else:
+            return pytest.mark.is_pipeline_test()(test_case)
 
 
 def slow(test_case):
@@ -1728,7 +1745,7 @@ def is_flaky(max_attempts: int = 5, wait_before_retry: Optional[float] = None, d
     return decorator
 
 
-def run_test_in_subprocess(test_case, target_func, inputs=None, timeout=600):
+def run_test_in_subprocess(test_case, target_func, inputs=None, timeout=None):
     """
     To run a test in a subprocess. In particular, this can avoid (GPU) memory issue.
 
@@ -1739,9 +1756,12 @@ def run_test_in_subprocess(test_case, target_func, inputs=None, timeout=600):
             The function implementing the actual testing logic.
         inputs (`dict`, *optional*, defaults to `None`):
             The inputs that will be passed to `target_func` through an (input) queue.
-        timeout (`int`, *optional*, defaults to 600):
-            The timeout (in seconds) that will be passed to the input and output queues.
+        timeout (`int`, *optional*, defaults to `None`):
+            The timeout (in seconds) that will be passed to the input and output queues. If not specified, the env.
+            variable `PYTEST_TIMEOUT` will be checked. If still `None`, its value will be set to `600`.
     """
+    if timeout is None:
+        timeout = int(os.environ.get("PYTEST_TIMEOUT", 600))
 
     start_methohd = "spawn"
     ctx = multiprocessing.get_context(start_methohd)

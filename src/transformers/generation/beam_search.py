@@ -287,6 +287,7 @@ class BeamSearchScorer(BeamScorer):
                 )
 
             # Check if we are done so that we can save a pad step if all(done)
+            cur_len += 1  # add up to the length which the next_scores is calculated on
             self._done[batch_idx] = self._done[batch_idx] or beam_hyp.is_done(
                 next_scores[batch_idx].max().item(), cur_len
             )
@@ -616,6 +617,7 @@ class ConstrainedBeamSearchScorer(BeamScorer):
                 )
 
             # Check if we are done so that we can save a pad step if all(done)
+            cur_len += 1  # add up to the length which the next_scores is calculated on
             self._done[batch_idx] = self._done[batch_idx] or beam_hyp.is_done(
                 next_scores[batch_idx].max().item(), cur_len
             )
@@ -869,6 +871,7 @@ class BeamHypotheses:
         self.num_beams = num_beams
         self.beams = []
         self.worst_score = 1e9
+        self.max_hypotheses_length = 0
 
         if not isinstance(self.early_stopping, bool) and self.max_length is None:
             raise ValueError(
@@ -886,6 +889,7 @@ class BeamHypotheses:
         """
         Add a new hypothesis to the list.
         """
+        self.max_hypotheses_length = max(self.max_hypotheses_length, hyp.shape[0])
         score = sum_logprobs / (hyp.shape[-1] ** self.length_penalty)
         if len(self) < self.num_beams or score > self.worst_score:
             self.beams.append((score, hyp, beam_indices))
